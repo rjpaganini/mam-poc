@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+instance/
+
+# React
+node_modules/
+/frontend/build
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Database
+*.sqlite
+*.db
+
+# Media files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.jpg
+*.png
+*.gif
+
+# Logs and backups
+*.log
+backups/
+logs/
+~/
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

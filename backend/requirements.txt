@@ -1,0 +1,43 @@
+# Core dependencies - minimal, stable versions
+Flask==3.0.2  # Latest stable with security patches
+Flask-SQLAlchemy==3.1.1  # ORM for database operations
+SQLAlchemy==2.0.27  # Core ORM functionality
+Werkzeug==3.0.1  # WSGI utilities
+Flask-Sock==0.7.0  # WebSocket support
+
+# Media processing - essential for video handling
+ffmpeg-python==0.2.0  # Stable FFmpeg wrapper
+Pillow==10.2.0  # Image processing
+python-magic==0.4.27  # File type detection
+
+# API and serialization - for robust data handling
+flask-cors==4.0.0  # Cross-origin support
+marshmallow==3.20.2  # Object serialization/validation
+marshmallow-sqlalchemy==1.0.0  # ORM/Marshmallow integration
+
+# Production essentials
+gunicorn==21.2.0  # Production WSGI server
+python-dotenv==1.0.1  # Environment management
+psutil==5.9.8  # System and process utilities for monitoring
+
+# Caching and performance
+redis==5.0.1  # Optional: For response caching
+Flask-Caching==2.1.0  # Optional: API response caching
+
+# Logging and monitoring
+structlog==24.1.0  # Structured logging
+sentry-sdk==1.40.0  # Optional: Error tracking
+
+# Security
+Flask-Talisman==1.1.0  # Security headers
+PyJWT==2.8.0  # JWT authentication
+
+# Development dependencies
+black==24.1.1  # Code formatting
+flake8==7.0.0  # Linting
+pytest==8.0.0  # Testing
+pytest-cov==4.1.0  # Test coverage
+watchdog==3.0.0  # File monitoring
+
+# Note: python-magic/python-magic-bin is installed by the launch script
+# based on the platform (macOS vs Linux) 

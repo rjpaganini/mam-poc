@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Box } from '@mui/material';
 import config from '../../config';
-import { formatFileSize } from '../../utils/formatters';
+import { formatFileSize, formatDuration } from '../../utils/formatters';
 import logger from '../../services/logger';
 
 // Error boundary for asset card rendering
@@ -32,7 +32,7 @@ class AssetCardErrorBoundary extends React.Component {
     }
 }
 
-// Updated styles to handle both elements being always present
+// Updated styles with safe theme access and fallbacks
 const styles = {
     card: {
         backgroundColor: config.theme.colors.surface,
@@ -57,8 +57,8 @@ const styles = {
         pointerEvents: 'none'
     },
     videoHovered: {
-        pointerEvents: 'auto', // Enable mouse events when hovered
-        cursor: 'col-resize'   // Show scrubbing cursor
+        pointerEvents: 'auto',
+        cursor: 'col-resize'
     },
     hidden: {
         visibility: 'hidden',
@@ -86,43 +86,90 @@ const styles = {
         objectFit: 'cover'
     },
     content: {
-        padding: config.theme.spacing.md
+        padding: '6px 8px',
     },
     title: {
         margin: 0,
-        marginBottom: config.theme.spacing.sm,
-        color: config.theme.colors.text.primary,
-        fontSize: config.theme.fontSize.md,
-        fontWeight: config.theme.fontWeight.bold,
+        marginBottom: '4px',
+        color: theme => theme.palette.text.primary,
+        fontSize: '0.7rem !important',
+        fontWeight: theme => theme.typography.fontWeightMedium,
         whiteSpace: 'nowrap',
         overflow: 'hidden',
-        textOverflow: 'ellipsis'
+        textOverflow: 'ellipsis',
+        lineHeight: 1.2,
+        fontFamily: theme => theme.typography.fontFamily.base
     },
     metadataGrid: {
         display: 'grid',
         gridTemplateColumns: 'repeat(2, 1fr)',
-        gap: config.theme.spacing.xs,
-        fontSize: config.theme.fontSize.sm
+        gridTemplateRows: 'repeat(3, auto)',
+        gap: '1px 3px',
+        padding: 0,
+        marginTop: '1px'
     },
     metadataItem: {
-        color: config.theme.colors.text.secondary
+        color: theme => theme.palette.text.secondary,
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: '1px',
+        fontSize: '0.4rem !important',
+        fontFamily: theme => theme.typography.fontFamily.base,
+        lineHeight: 1
+    },
+    metadataLabel: {
+        color: theme => theme.palette.text.secondary,
+        fontWeight: theme => theme.typography.fontWeightMedium,
+        fontSize: '0.4rem !important',
+        opacity: 0.7,
+        whiteSpace: 'nowrap',
+        fontFamily: theme => theme.typography.fontFamily.base,
+        lineHeight: 1
+    },
+    metadataValue: {
+        color: theme => theme.palette.text.primary,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        fontSize: '0.4rem !important',
+        fontWeight: theme => theme.typography.fontWeightMedium,
+        flex: 1,
+        fontFamily: theme => theme.typography.fontFamily.base,
+        lineHeight: 1
     }
 };
 
 // Format metadata values for clean display
 const formatMetadata = (value, type) => {
+    if (!value || value === '-') return '-';
+    
     switch(type) {
-        case 'duration': return `${Math.round(value)}s`;
-        case 'resolution': return value.join('×');
-        case 'fps': return `${Number(value).toFixed(1)} fps`;
-        case 'size': return formatFileSize(value);
-        case 'codec': return value || '-';
-        case 'bitrate': return `${formatFileSize(value)}/s`;
-        default: return value;
+        case 'duration':
+            return formatDuration(value);
+        case 'resolution':
+            return value; // Resolution is already formatted
+        case 'fps':
+            return Number(value).toFixed(2); // Limit to 2 decimal places
+        case 'size':
+            // Ensure we're handling a number
+            const size = typeof value === 'number' ? value : parseInt(value, 10);
+            return formatFileSize(size);
+        case 'codec':
+            return value.toString().toUpperCase();
+        case 'format':
+            return value.toString().toUpperCase();
+        case 'bitrate':
+            // Convert to Mbps with proper formatting
+            const mbps = value / 1000000;
+            return mbps >= 1 ? 
+                `${mbps.toFixed(1)} Mbps` : 
+                `${(value / 1000).toFixed(0)} Kbps`;
+        default:
+            return value.toString();
     }
 };
 
-// Helper function to construct thumbnail URLs
+// Enhanced thumbnail URL generator with caching
 const getThumbnailUrl = (thumbnailPath) => {
     if (!thumbnailPath) return null;
     // Remove leading slash if present
@@ -132,135 +179,171 @@ const getThumbnailUrl = (thumbnailPath) => {
     return `${config.api.thumbnailURL}/${filename}`;
 };
 
-// Cache for successful thumbnail loads
-const thumbnailCache = new Map();
-
-// Cache for loaded videos to prevent duplicate requests
+// Cache for preloaded videos and thumbnails with timestamp tracking
 const videoCache = new Map();
+const thumbnailCache = new Map();
+const videoLoadingPromises = new Map();
 
-// Enhanced media loader with preloading support
+/**
+ * Enhanced media loader hook with better error handling and loading states
+ */
 const useMediaLoader = (asset) => {
-    const [isLoaded, setIsLoaded] = useState(false);
-    const [hasError, setHasError] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [isVideoReady, setIsVideoReady] = useState(false);
+    const [loadError, setLoadError] = useState(null);
     const videoRef = useRef(null);
-    const loadAttempts = useRef(0);
+    const retryCount = useRef(0);
     const MAX_RETRIES = 3;
 
     useEffect(() => {
-        if (!asset?.file_path) {
-            logger.warn('Asset missing file_path', { assetId: asset?.id });
-            return;
-        }
-        
-        const filename = asset.file_path.split('/').pop();
-        const videoUrl = `${config.api.mediaURL}/${encodeURIComponent(filename)}`;
-        
-        // Start performance timer
-        logger.startTimer(`video-load-${asset.id}`);
-        
-        // Check cache first
-        if (videoCache.has(videoUrl)) {
-            setIsLoaded(true);
-            setIsLoading(false);
-            logger.debug('Video loaded from cache', { assetId: asset.id, url: videoUrl });
-            return;
-        }
+        if (!asset?.file_path) return;
+        let isMounted = true;
 
-        // Create video element for metadata loading
-        const video = document.createElement('video');
-        video.preload = 'metadata';
-        
-        video.onloadedmetadata = () => {
-            videoCache.set(videoUrl, true);
-            setIsLoaded(true);
-            setIsLoading(false);
-            logger.info('Video metadata loaded', {
-                assetId: asset.id,
-                duration: video.duration,
-                size: video.videoWidth + 'x' + video.videoHeight
-            });
-            logger.endTimer(`video-load-${asset.id}`);
-        };
-
-        video.onerror = (error) => {
-            loadAttempts.current++;
-            logger.error('Video metadata load failed', error, {
-                assetId: asset.id,
-                url: videoUrl,
-                attempt: loadAttempts.current
-            });
-
-            if (loadAttempts.current < MAX_RETRIES) {
-                // Retry loading after exponential backoff
-                setTimeout(() => {
-                    video.src = videoUrl;
-                }, Math.pow(2, loadAttempts.current) * 1000);
-            } else {
-                setHasError(true);
+        const loadMedia = async () => {
+            try {
+                // Show thumbnail immediately while video loads
                 setIsLoading(false);
-                logger.error('Video load failed after max retries', error, {
-                    assetId: asset.id,
-                    maxRetries: MAX_RETRIES
+                
+                // Check if already loading
+                if (videoLoadingPromises.has(asset.id)) {
+                    await videoLoadingPromises.get(asset.id);
+                    if (isMounted) {
+                        setIsVideoReady(true);
+                    }
+                    return;
+                }
+
+                // Check cache first
+                if (videoCache.has(asset.id)) {
+                    if (isMounted) {
+                        setIsVideoReady(true);
+                    }
+                    return;
+                }
+
+                // Create loading promise
+                const loadPromise = new Promise(async (resolve, reject) => {
+                    try {
+                        if (videoRef.current) {
+                            const videoPath = encodeURIComponent(asset.file_path.split('/').pop());
+                            const videoUrl = `${config.api.mediaURL}/${videoPath}`;
+
+                            // Set up video event handlers
+                            videoRef.current.onloadedmetadata = () => {
+                                videoRef.current.preload = 'metadata';
+                            };
+
+                            videoRef.current.oncanplaythrough = () => {
+                                if (isMounted) {
+                                    setIsVideoReady(true);
+                                    videoCache.set(asset.id, {
+                                        video: videoRef.current,
+                                        timestamp: Date.now()
+                                    });
+                                    resolve();
+                                }
+                            };
+
+                            videoRef.current.onerror = (e) => {
+                                const error = e.target.error;
+                                logger.error('Video load error:', {
+                                    code: error.code,
+                                    message: error.message,
+                                    assetId: asset.id,
+                                    retryCount: retryCount.current
+                                });
+                                reject(error);
+                            };
+
+                            videoRef.current.src = videoUrl;
+                            await videoRef.current.load();
+                        }
+                    } catch (error) {
+                        reject(error);
+                    }
                 });
+
+                videoLoadingPromises.set(asset.id, loadPromise);
+                await loadPromise;
+
+            } catch (error) {
+                if (retryCount.current < MAX_RETRIES) {
+                    retryCount.current++;
+                    await new Promise(r => setTimeout(r, 1000 * retryCount.current));
+                    await loadMedia();
+                } else {
+                    setLoadError(error);
+                    logger.error('Failed to load media after retries:', {
+                        error,
+                        assetId: asset.id,
+                        retries: retryCount.current
+                    });
+                }
+            } finally {
+                videoLoadingPromises.delete(asset.id);
             }
         };
 
-        // Set up fetch with proper headers
-        const controller = new AbortController();
-        const headers = new Headers({
-            'Range': 'bytes=0-1024',
-            'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-        });
-
-        fetch(videoUrl, {
-            method: 'GET',
-            headers: headers,
-            signal: controller.signal,
-            credentials: 'same-origin'
-        }).then(response => {
-            if (response.ok || response.status === 206) {
-                video.src = videoUrl;
-                logger.debug('Video fetch successful', {
-                    assetId: asset.id,
-                    status: response.status,
-                    contentType: response.headers.get('content-type')
-                });
-            } else {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-        }).catch(error => {
-            if (error.name === 'AbortError') {
-                logger.debug('Video fetch aborted', { assetId: asset.id });
-                return;
-            }
-            logger.error('Video fetch failed', error, {
-                assetId: asset.id,
-                url: videoUrl
-            });
-            setHasError(true);
-            setIsLoading(false);
-        });
-
+        loadMedia();
         return () => {
-            controller.abort();
-            video.onloadedmetadata = null;
-            video.onerror = null;
-            video.src = '';
-            logger.debug('Video load cleanup', { assetId: asset.id });
+            isMounted = false;
+            if (videoRef.current) {
+                videoRef.current.onloadedmetadata = null;
+                videoRef.current.oncanplaythrough = null;
+                videoRef.current.onerror = null;
+            }
         };
     }, [asset]);
 
-    return { isLoaded, hasError, isLoading, videoRef };
+    return { isLoading, isVideoReady, loadError, setIsVideoReady, videoRef };
+};
+
+const handleVideoError = (e, asset, videoRef) => {
+    const error = e.target.error;
+    logger.error('Video load error:', {
+        assetId: asset.id,
+        title: asset.title,
+        code: error?.code,
+        message: error?.message,
+        src: videoRef.current?.src
+    });
+
+    // Check if video source is accessible
+    fetch(videoRef.current?.src, { method: 'HEAD' })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            // If HEAD request succeeds but video still fails, might be a codec issue
+            logger.warn('Video source is accessible but playback failed', {
+                assetId: asset.id,
+                status: response.status,
+                contentType: response.headers.get('content-type')
+            });
+        })
+        .catch(fetchError => {
+            logger.error('Video source is not accessible', {
+                assetId: asset.id,
+                error: fetchError.message
+            });
+        });
 };
 
 // Simple card component for media assets
 export const AssetCard = ({ asset, onClick }) => {
+    // Add debug logging
+    console.log('AssetCard received asset:', {
+        id: asset?.id,
+        title: asset?.title,
+        file_size: asset?.file_size,
+        metadata: asset?.media_metadata
+    });
+    
     const [isHovered, setIsHovered] = useState(false);
-    const [isVideoReady, setIsVideoReady] = useState(false);
-    const { isLoaded, hasError, isLoading, videoRef } = useMediaLoader(asset);
+    const { isLoading, isVideoReady, loadError, setIsVideoReady, videoRef } = useMediaLoader(asset);
+    
+    // Add scrubbing state
+    const [isDragging, setIsDragging] = useState(false);
     
     // Prevent any rendering if asset is invalid
     if (!asset?.file_path) return null;
@@ -272,64 +355,99 @@ export const AssetCard = ({ asset, onClick }) => {
         ? getThumbnailUrl(asset.media_metadata.thumbnail_url)
         : null;
 
-    // Handle video scrubbing
-    const handleMouseMove = (e) => {
-        if (isHovered && videoRef.current?.duration) {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const scrubPosition = (x / rect.width) * videoRef.current.duration;
-            videoRef.current.currentTime = Math.max(0, Math.min(scrubPosition, videoRef.current.duration));
-        }
-    };
-
+    // Handle hover states and video playback
     const handleMouseEnter = () => {
         setIsHovered(true);
-        if (videoRef.current) {
-            // Reset video state
+        if (videoRef.current && isVideoReady) {
             videoRef.current.currentTime = 0;
-            
-            // Only attempt autoplay if video is loaded
-            if (isVideoReady) {
-                const playPromise = videoRef.current.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(() => {
-                        // Suppress autoplay error - this is expected on first interaction
-                        console.warn('Video autoplay failed - user interaction may be needed');
-                    });
-                }
-            }
+            videoRef.current.play().catch(() => {
+                // Suppress expected autoplay errors
+            });
         }
     };
 
     const handleMouseLeave = () => {
         setIsHovered(false);
+        setIsDragging(false);
         if (videoRef.current) {
             videoRef.current.pause();
             videoRef.current.currentTime = 0;
         }
     };
 
-    const handleVideoLoaded = () => {
-        setIsVideoReady(true);
-        if (isHovered && videoRef.current) {
-            const playPromise = videoRef.current.play();
-            if (playPromise !== undefined) {
-                playPromise.catch(() => {
-                    // Suppress autoplay error
-                });
-            }
+    // Enhanced mouse handlers
+    const handleMouseMove = (e) => {
+        if (!isVideoReady || !videoRef.current || !isHovered || loadError) return;
+        
+        const rect = e.currentTarget.getBoundingClientRect();
+        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+        const percentage = x / rect.width;
+        
+        if (videoRef.current.duration) {
+            // Ensure smooth scrubbing
+            requestAnimationFrame(() => {
+                if (videoRef.current) {
+                    videoRef.current.currentTime = percentage * videoRef.current.duration;
+                }
+            });
         }
     };
 
-    const handleVideoError = (e) => {
-        console.error(`Video load error for ${asset.title}:`, e);
-        setIsVideoReady(false);
-        // Retry loading after a short delay
-        setTimeout(() => {
-            if (videoRef.current) {
-                videoRef.current.load();
+    const handleMouseDown = () => {
+        if (isVideoReady && videoRef.current) {
+            setIsDragging(true);
+            videoRef.current.pause();
+        }
+    };
+
+    const handleMouseUp = () => {
+        setIsDragging(false);
+        if (isVideoReady && videoRef.current && isHovered) {
+            videoRef.current.play().catch(() => {});
+        }
+    };
+
+    const handleVideoLoaded = () => {
+        setIsVideoReady(true);
+    };
+
+    // Get metadata items for display
+    const getMetadataItems = () => {
+        if (!asset.media_metadata) return [];
+
+        const metadata = asset.media_metadata;
+        return [
+            {
+                label: 'Size',
+                value: asset.file_size,
+                type: 'size'
+            },
+            {
+                label: 'Res',
+                value: metadata.width && metadata.height ? `${metadata.width}×${metadata.height}` : '-',
+                type: 'resolution'
+            },
+            {
+                label: 'Dur',
+                value: metadata.duration || '-',
+                type: 'duration'
+            },
+            {
+                label: 'FPS',
+                value: metadata.fps || '-',
+                type: 'fps'
+            },
+            {
+                label: 'Codec',
+                value: metadata.codec || '-',
+                type: 'codec'
+            },
+            {
+                label: 'Format',
+                value: asset.file_path ? asset.file_path.split('.').pop() : '-',
+                type: 'format'
             }
-        }, 2000);
+        ];
     };
 
     return (
@@ -339,9 +457,12 @@ export const AssetCard = ({ asset, onClick }) => {
                 onClick={onClick}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={handleMouseLeave}
-                onMouseMove={handleMouseMove}
             >
-                <Box sx={styles.mediaContainer}>
+                <Box sx={styles.mediaContainer}
+                    onMouseMove={handleMouseMove}
+                    onMouseDown={handleMouseDown}
+                    onMouseUp={handleMouseUp}
+                >
                     {isLoading && (
                         <div style={{
                             position: 'absolute',
@@ -390,23 +511,19 @@ export const AssetCard = ({ asset, onClick }) => {
                         playsInline
                         loop
                         onLoadedMetadata={handleVideoLoaded}
-                        onError={handleVideoError}
+                        onError={(e) => handleVideoError(e, asset, videoRef)}
                         crossOrigin="anonymous"
                     />
                 </Box>
                 <div style={styles.content}>
                     <h3 style={styles.title}>{asset.title}</h3>
                     <div style={styles.metadataGrid}>
-                        {Object.entries({
-                            resolution: asset.media_metadata?.resolution,
-                            duration: asset.media_metadata?.duration,
-                            fps: asset.media_metadata?.fps,
-                            size: asset.media_metadata?.file_size,
-                            codec: asset.media_metadata?.codec,
-                            bitrate: asset.media_metadata?.bitrate
-                        }).map(([key, value]) => value && (
-                            <div key={key} style={styles.metadataItem}>
-                                {formatMetadata(value, key)}
+                        {getMetadataItems().map(({ label, value, type }) => (
+                            <div key={label} style={styles.metadataItem}>
+                                <span style={styles.metadataLabel}>{label}:</span>
+                                <span style={styles.metadataValue}>
+                                    {formatMetadata(value, type)}
+                                </span>
                             </div>
                         ))}
                     </div>

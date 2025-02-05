@@ -12,7 +12,7 @@ from .database import db
 from .models import MediaAsset, Tag, MediaDirectory
 from .config import API_PREFIX, MEDIA_BASE_PATH
 from .utils.path_utils import sanitize_path, validate_media_path, validate_media_access
-from .utils.extract_metadata import extract_metadata
+from .utils.extract_metadata import extract_metadata, generate_thumbnail
 from .utils.process_directory import process_directory
 from .utils.error_handler import MediaError, error_handler
 from .utils.logger import log_operation
@@ -27,27 +27,14 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
-from .utils.memory_monitor import MemoryMonitor
 from .utils.file_utils import file_reader, partial_file_reader
-from .websocket import sock  # Import WebSocket instance from websocket module
+from .websocket import sock, connection_pool
 import simple_websocket
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-def _increment_ws_connections():
-    """Increment the WebSocket connections counter."""
-    if not hasattr(current_app, 'ws_connections'):
-        current_app.ws_connections = 0
-    current_app.ws_connections += 1
-    logger.debug(f"WebSocket connections: {current_app.ws_connections}")
-
-def _decrement_ws_connections():
-    """Decrement the WebSocket connections counter."""
-    if hasattr(current_app, 'ws_connections'):
-        current_app.ws_connections = max(0, current_app.ws_connections - 1)
-        logger.debug(f"WebSocket connections: {current_app.ws_connections}")
 
 # Create blueprint with API prefix
 api = Blueprint('api', __name__, url_prefix=API_PREFIX)
@@ -216,43 +203,70 @@ def open_folder():
         return jsonify({"error": "Failed to open folder"}), 500
 
 @api.route('/media/<path:filename>')
+@cross_origin()
 def serve_media(filename):
     """
-    Serve media files from Google Drive (single source of truth)
+    Stream media files with proper headers and range support.
+    Handles partial content requests for video streaming.
     """
     try:
-        # Find the asset in the database
-        asset = MediaAsset.query.filter(MediaAsset.file_path.like(f"%{filename}")).first()
-        if not asset:
-            logger.error(f"Media file not found in database: {filename}")
-            return jsonify({"error": "Media file not found in database"}), 404
-            
-        # Get the full Google Drive path
-        file_path = Path(asset.file_path).expanduser().resolve()
-        logger.info(f"Looking for file at: {file_path}")
-            
-        # Verify file exists
-        if not file_path.is_file():
-            logger.error(f"Media file not found on disk: {file_path}")
-            return jsonify({"error": "Media file not found on disk"}), 404
-            
-        # Serve the file from Google Drive
-        logger.info(f"Serving file from Google Drive: {file_path}")
-        directory = os.path.dirname(str(file_path))
-        basename = os.path.basename(str(file_path))
+        # Construct absolute path and validate
+        file_path = os.path.join(MEDIA_BASE_PATH, filename)
+        if not os.path.exists(file_path):
+            current_app.logger.error(f"Media file not found: {file_path}")
+            return jsonify({'error': 'Media file not found'}), 404
+
+        # Get file size
+        file_size = os.path.getsize(file_path)
         
-        # Add content type header based on file extension
-        response = send_from_directory(directory, basename)
-        response.headers['Cache-Control'] = 'public, max-age=31536000'
+        # Handle range requests
+        range_header = request.headers.get('Range', None)
         
-        logger.info(f"Successfully serving file: {basename}")
-        return response
+        if range_header:
+            byte1, byte2 = 0, None
+            match = re.search('bytes=(\d+)-(\d*)', range_header)
+            groups = match.groups()
+            
+            if groups[0]:
+                byte1 = int(groups[0])
+            if groups[1]:
+                byte2 = int(groups[1])
+            
+            if byte2 is None:
+                byte2 = file_size - 1
+            
+            length = byte2 - byte1 + 1
+            
+            resp = Response(
+                partial_file_reader(file_path, byte1, byte2),
+                status=206,
+                mimetype=mimetypes.guess_type(filename)[0],
+                direct_passthrough=True
+            )
+            
+            resp.headers.add('Content-Range', f'bytes {byte1}-{byte2}/{file_size}')
+            resp.headers.add('Accept-Ranges', 'bytes')
+            resp.headers.add('Content-Length', str(length))
+        else:
+            resp = Response(
+                file_reader(file_path),
+                mimetype=mimetypes.guess_type(filename)[0]
+            )
+            resp.headers.add('Content-Length', str(file_size))
+        
+        # Add CORS headers
+        resp.headers.add('Access-Control-Allow-Origin', '*')
+        resp.headers.add('Access-Control-Allow-Headers', 'Range')
+        resp.headers.add('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges')
+        resp.headers.add('Cache-Control', 'public, max-age=3600')
+        
+        return resp
         
     except Exception as e:
-        logger.error(f"Error serving media file {filename}: {str(e)}", exc_info=True)
+        current_app.logger.error(f"Error serving media file {filename}: {str(e)}")
         return jsonify({
-            "error": "Error serving media file",
-            "details": str(e)
+            'error': 'Failed to serve media file',
+            'details': str(e)
         }), 500
 
 @api.route('/tags', methods=['GET'])
@@ -443,118 +457,6 @@ def debug_paths():
         'files': os.listdir(MEDIA_BASE_PATH) if os.path.exists(MEDIA_BASE_PATH) else []
     })
 
-@api.route('/health')
-@cross_origin()
-def health_check():
-    """
-    Health check endpoint providing system metrics.
-    Returns:
-        JSON with system health metrics including:
-        - Memory usage
-        - Database connection status
-        - WebSocket connection count
-        - System uptime
-    """
-    try:
-        # Get memory metrics using singleton instance
-        monitor = current_app.memory_monitor
-        memory_metrics = monitor.get_memory_usage() if monitor else {}
-        
-        # Check database connection
-        db_status = True
-        try:
-            db.session.execute(text('SELECT 1'))
-        except Exception as e:
-            db_status = False
-            current_app.logger.error(f"Database health check failed: {e}")
-        
-        # Get active WebSocket connections count
-        ws_connections = getattr(current_app, 'ws_connections', 0)
-        
-        return jsonify({
-            'status': 'healthy',
-            'timestamp': datetime.utcnow().isoformat(),
-            'memory': memory_metrics,
-            'database': {
-                'connected': db_status,
-                'active_sessions': db.session.query(text('COUNT(*) AS count')).scalar() if db_status else 0
-            },
-            'websocket': {
-                'active_connections': ws_connections
-            }
-        }), 200
-    except Exception as e:
-        current_app.logger.error(f"Health check failed: {e}")
-        return jsonify({
-            'status': 'unhealthy',
-            'error': str(e),
-            'timestamp': datetime.utcnow().isoformat()
-        }), 500
-
-@sock.route('/ws')
-@cross_origin()
-def handle_websocket(ws):
-    """Handle WebSocket connections and messages."""
-    try:
-        # Increment connection counter
-        _increment_ws_connections()
-        
-        # Keep connection alive until closed
-        while True:
-            try:
-                message = ws.receive(timeout=30.0)  # 30 second timeout
-                if message is None:
-                    break
-                    
-                # Parse message
-                try:
-                    data = json.loads(message)
-                except json.JSONDecodeError:
-                    logger.error("Invalid JSON message received")
-                    ws.send(json.dumps({
-                        "type": "error",
-                        "message": "Invalid message format"
-                    }))
-                    continue
-
-                # Handle different message types
-                msg_type = data.get('type')
-                if msg_type == 'ping':
-                    ws.send(json.dumps({"type": "pong"}))
-                elif msg_type == 'scan_start':
-                    # Handle scan start message
-                    pass
-                elif msg_type == 'thumbnail_request':
-                    # Handle thumbnail request
-                    pass
-                else:
-                    logger.warning(f"Unknown message type: {msg_type}")
-                    ws.send(json.dumps({
-                        "type": "error",
-                        "message": f"Unknown message type: {msg_type}"
-                    }))
-
-            except simple_websocket.errors.ConnectionClosed:
-                logger.info("WebSocket connection closed by client")
-                break
-            except Exception as e:
-                logger.error(f"Error processing WebSocket message: {str(e)}")
-                try:
-                    ws.send(json.dumps({
-                        "type": "error",
-                        "message": "Internal server error"
-                    }))
-                except:
-                    logger.error("Failed to send error message to client")
-                    break
-                
-    except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}")
-    finally:
-        # Always decrement connection counter
-        _decrement_ws_connections()
-        logger.info("WebSocket connection cleaned up")
-
 @api.route('/thumbnails/<path:filename>')
 @cross_origin()
 def serve_thumbnail(filename):
@@ -577,9 +479,11 @@ def serve_thumbnail(filename):
             current_app.logger.error(f"Thumbnail not found: {filepath}")
             return jsonify({"error": "Thumbnail not found"}), 404
             
-        # Add caching headers for better performance
+        # Add no-cache headers to force browser to reload thumbnails
         response = send_file(filepath, mimetype='image/jpeg')
-        response.headers['Cache-Control'] = 'public, max-age=31536000'  # Cache for 1 year
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
         return response
         
     except Exception as e:
@@ -624,4 +528,183 @@ def handle_logs():
         return jsonify({
             "error": "Failed to handle logs",
             "details": str(e)
-        }), 500 
+        }), 500
+
+@api.route('/websocket/stats')
+@cross_origin()
+def websocket_stats():
+    """Get current WebSocket connection statistics."""
+    try:
+        stats = connection_pool.get_stats()
+        return jsonify({
+            'status': 'success',
+            'timestamp': datetime.utcnow().isoformat(),
+            'stats': stats
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Failed to get WebSocket stats: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
+
+@api.route('/regenerate-thumbnails', methods=['POST'])
+@cross_origin()
+def regenerate_thumbnails():
+    """Regenerate thumbnails for all video assets."""
+    try:
+        # Get request data
+        data = request.get_json() or {}
+        thumbnail_timestamp = data.get('timestamp', 6)  # Default to 6 seconds if not specified
+        
+        # Get thumbnails directory
+        media_base = os.path.expanduser(os.getenv('MEDIA_BASE_PATH', ''))
+        if not media_base:
+            current_app.logger.error("MEDIA_BASE_PATH not set")
+            return jsonify({"error": "Server configuration error"}), 500
+            
+        thumbnails_dir = os.path.join(os.path.dirname(media_base), 'thumbnails')
+        
+        # Clean up existing thumbnails
+        if os.path.exists(thumbnails_dir):
+            current_app.logger.info(f"Cleaning up existing thumbnails in {thumbnails_dir}")
+            for file in os.listdir(thumbnails_dir):
+                try:
+                    os.remove(os.path.join(thumbnails_dir, file))
+                    current_app.logger.info(f"Removed old thumbnail: {file}")
+                except Exception as e:
+                    current_app.logger.warning(f"Failed to remove thumbnail {file}: {e}")
+        
+        # Get all video assets
+        assets = MediaAsset.query.filter(MediaAsset.mime_type.like('video/%')).all()
+        
+        results = {
+            'success': 0,
+            'failed': 0,
+            'errors': [],
+            'timestamp_used': thumbnail_timestamp  # Include the timestamp used in response
+        }
+        
+        # Regenerate thumbnails
+        for asset in assets:
+            try:
+                if not os.path.exists(asset.file_path):
+                    raise FileNotFoundError(f"Video file not found: {asset.file_path}")
+                
+                # Generate new thumbnail at specified timestamp
+                thumbnail_path = generate_thumbnail(asset.file_path, timestamp=thumbnail_timestamp)
+                if thumbnail_path:
+                    # Update asset metadata
+                    current_metadata = asset.media_metadata or {}
+                    
+                    # Create a new dictionary with updated thumbnail info
+                    updated_metadata = {
+                        **current_metadata,  # Preserve existing metadata
+                        'thumbnail_url': f"/thumbnails/{os.path.basename(thumbnail_path)}",
+                        'thumbnail_timestamp': thumbnail_timestamp,  # Store the actual timestamp used
+                        'thumbnail_generated_at': datetime.utcnow().isoformat()  # Add generation timestamp
+                    }
+                    
+                    # Update the asset with the merged metadata
+                    asset.media_metadata = updated_metadata
+                    asset.thumbnail_timestamp = thumbnail_timestamp  # Update root level field too
+                    db.session.add(asset)
+                    db.session.flush()
+                    results['success'] += 1
+                else:
+                    raise Exception("Thumbnail generation returned None")
+                    
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append({
+                    'asset_id': asset.id,
+                    'title': asset.title,
+                    'error': str(e)
+                })
+                current_app.logger.error(f"Failed to regenerate thumbnail for {asset.title}: {str(e)}")
+                continue
+        
+        # Commit all changes at once
+        db.session.commit()
+        
+        # Add cache-busting timestamp to response
+        results['generation_timestamp'] = datetime.utcnow().isoformat()
+        
+        return jsonify({
+            "message": "Thumbnail regeneration complete",
+            "results": results
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error during thumbnail regeneration: {str(e)}")
+        return jsonify({
+            "error": "Failed to regenerate thumbnails",
+            "details": str(e)
+        }), 500
+
+# Initialize WebSocket with proper error handling
+sock = Sock()
+
+@sock.route('/ws')
+def handle_websocket(ws):
+    """
+    WebSocket connection handler with improved error handling and heartbeat.
+    Supports:
+    - Initial connection status
+    - Heartbeat (ping/pong)
+    - Graceful disconnection
+    - Detailed error logging
+    """
+    connection_id = str(uuid.uuid4())[:8]  # Generate unique connection ID for tracking
+    
+    try:
+        current_app.logger.info(f"New WebSocket connection established [id={connection_id}]")
+        
+        # Send initial connection status
+        ws.send(json.dumps({
+            'type': 'connection_status',
+            'data': {
+                'status': 'connected',
+                'connectionId': connection_id,
+                'serverTime': datetime.utcnow().isoformat()
+            }
+        }))
+        
+        # Main message loop
+        while True:
+            try:
+                data = ws.receive()
+                if data is None:  # Connection closed by client
+                    break
+                    
+                if data == 'ping':
+                    ws.send(json.dumps({
+                        'type': 'pong',
+                        'data': {
+                            'status': 'alive',
+                            'connectionId': connection_id,
+                            'serverTime': datetime.utcnow().isoformat()
+                        }
+                    }))
+                    
+            except simple_websocket.ConnectionClosed:
+                current_app.logger.info(f"WebSocket connection closed gracefully [id={connection_id}]")
+                break
+                
+    except Exception as e:
+        current_app.logger.error(f"WebSocket error [id={connection_id}]: {str(e)}")
+        # Attempt to send error message to client
+        try:
+            ws.send(json.dumps({
+                'type': 'error',
+                'data': {
+                    'message': 'Internal server error',
+                    'connectionId': connection_id
+                }
+            }))
+        except:
+            pass  # If sending error fails, just log it
+    finally:
+        current_app.logger.info(f"WebSocket connection terminated [id={connection_id}]") 

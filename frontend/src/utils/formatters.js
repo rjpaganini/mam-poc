@@ -3,15 +3,26 @@
  */
 
 /**
- * Formats a byte size into a human readable string
- * @param {number} bytes - Size in bytes
- * @returns {string} Formatted string with appropriate unit (B, KB, MB, GB)
+ * Formats a byte size into a human readable string in megabytes
+ * @param {number} size - Size in bytes or megabytes
+ * @returns {string} Formatted string in MB
  */
-export const formatFileSize = (bytes) => {
-    if (!bytes || isNaN(bytes)) return '0 B';
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+export const formatFileSize = (size) => {
+    // Handle invalid input
+    if (size === null || size === undefined || isNaN(size)) return '-';
+    
+    // Ensure we're working with a number
+    const numericSize = typeof size === 'number' ? size : parseFloat(size);
+    if (isNaN(numericSize)) return '-';
+    
+    // If size is already small (likely in MB), use it directly
+    // Otherwise convert from bytes to MB
+    const megabytes = numericSize < 1000 ? 
+        numericSize : 
+        numericSize / (1024 * 1024);
+    
+    // Format with appropriate precision
+    return `${megabytes.toFixed(1)} MB`;
 };
 
 /**
@@ -28,4 +39,44 @@ export const formatDate = (date) => {
         hour: '2-digit',
         minute: '2-digit'
     });
+};
+
+/**
+ * Format duration to timecode format (HH:MM:SS)
+ * @param {number} seconds - Duration in seconds
+ * @returns {string} Formatted duration string
+ */
+export const formatDuration = (seconds) => {
+    if (!seconds || isNaN(seconds)) return '-';
+    
+    const totalSeconds = parseFloat(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = Math.floor(totalSeconds % 60);
+    
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+};
+
+/**
+ * Format FPS to consistent decimal places
+ * @param {number} fps - Frames per second
+ * @returns {string} Formatted FPS string
+ */
+export const formatFPS = (fps) => {
+    if (!fps || isNaN(fps)) return '-';
+    return Number(fps).toFixed(2);
+};
+
+/**
+ * Format bitrate to Mbps
+ * @param {number} bitrate - Bitrate in bits per second
+ * @returns {string} Formatted bitrate string
+ */
+export const formatBitrate = (bitrate) => {
+    if (!bitrate || isNaN(bitrate)) return '-';
+    const mbps = (parseInt(bitrate, 10) / 1000000).toFixed(1);
+    return `${mbps} Mbps`;
 }; 

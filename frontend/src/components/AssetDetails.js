@@ -1,9 +1,58 @@
+/**
+ * @file: AssetDetails.js
+ * @type: Component (Route-Level)
+ * @description: Detailed view component for individual media assets.
+ * 
+ * This component provides a comprehensive view of a single media asset, including:
+ * - Video playback with controls
+ * - Technical metadata display (resolution, codec, bitrate, etc.)
+ * - File information and location
+ * - Navigation controls
+ * 
+ * Layout Structure:
+ * ┌─────────────────────────────────────────────────┐
+ * │ Back Button         Asset Title                 │
+ * ├───────────────────────┬─────────────────────────┤
+ * │                       │                         │
+ * │                       │     Metadata Panel      │
+ * │    Video Panel       │     - File Size         │
+ * │                       │     - Resolution        │
+ * │                       │     - Duration          │
+ * │                       │     - Frame Rate        │
+ * │                       │     - Codec            │
+ * │                       │     - Format           │
+ * │                       │                         │
+ * │                       │     [File Path]         │
+ * └───────────────────────┴─────────────────────────┘
+ * 
+ * @hierarchy
+ * App
+ * └─ AssetDetails (this file)
+ *    ├─ Video Player
+ *    └─ Metadata Panel
+ * 
+ * @dependencies
+ * - @mui/material: UI components and styling
+ * - react-router-dom: Navigation and routing
+ * - fileUtils: File system operations
+ * - formatters: Data formatting utilities
+ * 
+ * @features
+ * - Responsive video playback
+ * - Real-time metadata display
+ * - File system integration
+ * - Error boundary protection
+ * - Keyboard navigation support
+ */
+
 import React, { useState, useEffect } from 'react';
-import { Box, Paper } from '@mui/material';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Box, Paper, CircularProgress } from '@mui/material';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import config from '../config';
 import { openFolder } from '../utils/fileUtils';
 import logger from '../services/logger';
+import { assetsApi } from '../services/api';
+import { formatFileSize } from '../utils/formatters';
 
 // Error boundary for asset details
 class AssetDetailsErrorBoundary extends React.Component {
@@ -44,25 +93,76 @@ class AssetDetailsErrorBoundary extends React.Component {
  * Ensures consistent dark theme throughout with proper background coverage
  */
 const AssetDetails = () => {
+    const { id } = useParams();
     const { state } = useLocation();
     const navigate = useNavigate();
-    const asset = state?.asset;
+    const [asset, setAsset] = useState(state?.asset);
     const [videoError, setVideoError] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [showPath, setShowPath] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // Add keyboard shortcut for navigation
+    useEffect(() => {
+        const handleKeyPress = (e) => {
+            // Navigate back on Esc or Cmd/Ctrl + Left Arrow
+            if (e.key === 'Escape' || (e.key === 'ArrowLeft' && (e.metaKey || e.ctrlKey))) {
+                navigate('/');
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyPress);
+        return () => window.removeEventListener('keydown', handleKeyPress);
+    }, [navigate]);
+
+    // Fetch asset data
+    useEffect(() => {
+        const fetchAsset = async () => {
+            try {
+                setIsLoading(true);
+                // Try to fetch the specific asset first
+                const response = await fetch(`${config.api.baseURL}/api/v1/assets/${id}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                setAsset(data);
+                logger.info('Asset details loaded', {
+                    assetId: data.id,
+                    title: data.title
+                });
+            } catch (error) {
+                logger.error('Failed to fetch asset data', {
+                    error,
+                    assetId: id
+                });
+                // Fallback to using the passed state if available
+                if (!asset && state?.asset) {
+                    setAsset(state.asset);
+                }
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        fetchAsset();
+    }, [id, state?.asset]);
 
     useEffect(() => {
         if (!asset) {
             logger.warn('Asset details accessed without asset data', {
                 path: window.location.pathname,
-                state
+                state,
+                timestamp: new Date().toISOString()
             });
         } else {
             logger.info('Asset details viewed', {
                 assetId: asset.id,
-                title: asset.title
+                title: asset.title,
+                state
             });
         }
-    }, [asset]);
+    }, [asset, state]);
 
     // Handle opening folder in Finder
     const handleOpenFolder = async () => {
@@ -104,27 +204,63 @@ const AssetDetails = () => {
         });
     };
 
+    // Handle copy to clipboard with visual feedback
+    const handleCopy = async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            // Reset copy feedback after 2 seconds
+            setTimeout(() => setCopied(false), 2000);
+        } catch (err) {
+            logger.error('Failed to copy to clipboard:', err);
+        }
+    };
+
     // Format metadata values for display with error handling
     const formatMetadataValue = (key, value) => {
         try {
+            // Handle file size (stored in bytes at root level)
+            if (key === 'file_size') {
+                return formatFileSize(value);
+            }
+
+            // Handle objects (like audio info)
             if (typeof value === 'object' && value !== null) {
                 if ('channels' in value && 'codec' in value) {
-                    return `${value.codec} (${value.channels}ch${value.sample_rate ? `, ${value.sample_rate}Hz` : ''})`;
+                    // Format audio info
+                    return `${value.codec} (${value.channels}ch, ${value.sample_rate}Hz)`;
                 }
-                if (Array.isArray(value)) {
-                    return value.join(' × ');
-                }
-                return Object.entries(value)
-                    .map(([k, v]) => `${k}: ${v}`)
-                    .join(', ');
+                return '-';
             }
-            if (typeof value === 'number') {
-                if (key === 'duration') return `${Math.round(value)}s`;
-                if (key === 'fps') return `${value.toFixed(2)} fps`;
-                if (key === 'file_size') return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-                return value.toString();
+
+            // Handle specific metadata types
+            switch (key) {
+                case 'duration':
+                    // Format as timecode (00:00:00)
+                    const totalSeconds = Math.round(value);
+                    const hours = Math.floor(totalSeconds / 3600);
+                    const minutes = Math.floor((totalSeconds % 3600) / 60);
+                    const seconds = totalSeconds % 60;
+                    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                case 'fps':
+                    return `${Number(value).toFixed(2)}`;
+                case 'bitrate':
+                    // Convert to Mbps with proper formatting
+                    const mbps = value / 1000000; // Convert to Mbps
+                    if (mbps >= 1) {
+                        return `${mbps.toFixed(1)} Mbps`;
+                    } else {
+                        // For bitrates less than 1 Mbps, show in Kbps
+                        const kbps = value / 1000;
+                        return `${kbps.toFixed(0)} Kbps`;
+                    }
+                case 'width':
+                case 'height':
+                    // These will be combined into resolution
+                    return value.toString();
+                default:
+                    return value?.toString() || '-';
             }
-            return value || '-';
         } catch (error) {
             logger.error('Metadata formatting error', error, {
                 key,
@@ -135,10 +271,91 @@ const AssetDetails = () => {
         }
     };
 
-    // Base container style to ensure dark theme coverage
+    // Filter and transform metadata for display
+    const getDisplayMetadata = (asset) => {
+        if (!asset || !asset.media_metadata) return [];
+        
+        const metadata = asset.media_metadata;
+        const displayItems = [];
+        
+        // 1. File Size (use root level file_size)
+        if (asset.file_size) {
+            displayItems.push({
+                label: 'File Size',
+                value: formatMetadataValue('file_size', asset.file_size)
+            });
+        }
+        
+        // 2. Resolution (combine width and height)
+        if (metadata.width && metadata.height) {
+            displayItems.push({
+                label: 'Resolution',
+                value: `${metadata.width}×${metadata.height}`
+            });
+        }
+        
+        // 3. Duration
+        if (metadata.duration) {
+            displayItems.push({
+                label: 'Duration',
+                value: formatMetadataValue('duration', metadata.duration)
+            });
+        }
+        
+        // 4. Frame Rate
+        if (metadata.fps) {
+            displayItems.push({
+                label: 'Frame Rate',
+                value: formatMetadataValue('fps', metadata.fps)
+            });
+        }
+        
+        // 5. Video Codec (separated from container format)
+        if (metadata.codec) {
+            displayItems.push({
+                label: 'Codec',
+                value: metadata.codec.toUpperCase()
+            });
+        }
+
+        // 6. Container Format (file extension)
+        if (asset.file_path) {
+            displayItems.push({
+                label: 'Format',
+                value: asset.file_path.split('.').pop().toUpperCase()
+            });
+        }
+        
+        // 7. Video Bitrate
+        if (metadata.bitrate) {
+            displayItems.push({
+                label: 'Bitrate',
+                value: formatMetadataValue('bitrate', metadata.bitrate)
+            });
+        }
+        
+        // 8. Audio Information
+        if (metadata.audio) {
+            displayItems.push({
+                label: 'Audio',
+                value: formatMetadataValue('audio', metadata.audio)
+            });
+        }
+        
+        return displayItems;
+    };
+
+    // Update file path formatting to only show from vallin_io onwards
+    const formatFilePath = (path) => {
+        if (!path) return '';
+        const vallinIndex = path.indexOf('vallin_io');
+        return vallinIndex !== -1 ? `.../${path.substring(vallinIndex)}` : path;
+    };
+
+    // Base container style to ensure dark theme coverage and proper spacing
     const containerStyle = {
         position: 'fixed',
-        top: 0,
+        top: '64px', // Increased from 48px for more breathing room
         left: 0,
         right: 0,
         bottom: 0,
@@ -147,6 +364,32 @@ const AssetDetails = () => {
         padding: config.theme.spacing.lg
     };
 
+    // Update video URL construction
+    const getVideoUrl = (filePath) => {
+        const filename = filePath.split('/').pop();
+        return `${config.api.mediaURL}/${encodeURIComponent(filename)}`;
+    };
+
+    // Show loading state
+    if (isLoading) {
+        return (
+            <Box sx={containerStyle}>
+                <Box sx={{ 
+                    maxWidth: '1200px', 
+                    margin: '0 auto',
+                    padding: 2,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    height: '100%'
+                }}>
+                    <CircularProgress />
+                </Box>
+            </Box>
+        );
+    }
+
+    // Show error state if no asset found
     if (!asset) {
         return (
             <Box sx={containerStyle}>
@@ -169,7 +412,11 @@ const AssetDetails = () => {
                     >
                         ← Back to Library
                     </button>
-                    <Box sx={{ color: config.theme.colors.text.primary }}>
+                    <Box sx={{ 
+                        color: config.theme.colors.error,
+                        textAlign: 'center',
+                        mt: 4
+                    }}>
                         Asset not found
                     </Box>
                 </Box>
@@ -180,8 +427,9 @@ const AssetDetails = () => {
     return (
         <AssetDetailsErrorBoundary>
             <Box sx={containerStyle}>
+                {/* Main container with increased max width to accommodate side-by-side layout */}
                 <Box sx={{ 
-                    maxWidth: '1200px', 
+                    maxWidth: '1400px', // Increased to accommodate side-by-side layout
                     margin: '0 auto',
                     padding: 2
                 }}>
@@ -189,168 +437,237 @@ const AssetDetails = () => {
                     <Box sx={{ 
                         display: 'flex',
                         alignItems: 'center',
-                        gap: 2,
-                        marginBottom: 3
+                        mb: 2,
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 1,
+                        backgroundColor: config.theme.colors.background
                     }}>
                         <button 
                             onClick={() => navigate('/')}
                             style={{
-                                padding: `${config.theme.spacing.sm} ${config.theme.spacing.md}`,
+                                padding: '4px 8px',
                                 backgroundColor: 'transparent',
                                 color: config.theme.colors.text.primary,
                                 border: `1px solid ${config.theme.colors.border}`,
-                                borderRadius: config.theme.radius.md,
-                                cursor: 'pointer'
+                                borderRadius: config.theme.radius.sm,
+                                cursor: 'pointer',
+                                fontSize: '0.8rem'
                             }}
                         >
-                            ← Back to Library
+                            ←
                         </button>
                         <h1 style={{ 
                             margin: 0,
+                            marginLeft: config.theme.spacing.md,
                             color: config.theme.colors.text.primary,
-                            fontSize: config.theme.fontSize.xl
+                            fontSize: '1.2rem',
+                            fontWeight: 500
                         }}>
                             {asset.title}
                         </h1>
                     </Box>
 
-                    {/* Content Section */}
-                    <Paper sx={{
-                        backgroundColor: config.theme.colors.surface,
-                        borderRadius: config.theme.radius.lg,
-                        overflow: 'hidden',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                    {/* Content Container - Side by Side Layout */}
+                    <Box sx={{
+                        display: 'flex',
+                        gap: 2, // Reduced gap between panels
+                        alignItems: 'stretch'
                     }}>
-                        {/* Video Player with Error Handling */}
-                        <Box sx={{ position: 'relative', paddingTop: '56.25%', backgroundColor: '#000' }}>
-                            {isLoading && (
+                        {/* Video Player Container */}
+                        <Box sx={{
+                            flex: '1 1 85%', // Increased to 85% as metadata panel reduces
+                            backgroundColor: config.theme.colors.surface,
+                            borderRadius: config.theme.radius.lg,
+                            overflow: 'hidden',
+                            display: 'flex',
+                            flexDirection: 'column'
+                        }}>
+                            {videoError ? (
                                 <Box sx={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    color: config.theme.colors.text.primary
-                                }}>
-                                    Loading video...
-                                </Box>
-                            )}
-                            {videoError && (
-                                <Box sx={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    flexDirection: 'column',
+                                    p: 3,
                                     color: config.theme.colors.error,
-                                    p: 2
+                                    textAlign: 'center'
                                 }}>
-                                    <div>Failed to load video</div>
-                                    <div style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
-                                        {videoError.message}
-                                    </div>
+                                    Failed to load video
                                 </Box>
+                            ) : (
+                                <video
+                                    controls
+                                    style={{
+                                        width: '100%',
+                                        height: 'auto',
+                                        maxHeight: '70vh', // Reduced from 80vh
+                                        backgroundColor: '#000'
+                                    }}
+                                    onLoadedData={handleVideoLoad}
+                                    onError={handleVideoError}
+                                    src={getVideoUrl(asset.file_path)}
+                                />
                             )}
-                            <video
-                                style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    width: '100%',
-                                    height: '100%',
-                                    display: videoError ? 'none' : 'block'
-                                }}
-                                controls
-                                src={`${config.api.mediaURL}/${encodeURIComponent(asset.file_path.split('/').pop())}`}
-                                onLoadedMetadata={handleVideoLoad}
-                                onError={handleVideoError}
-                            />
                         </Box>
 
-                        {/* Metadata Section */}
-                        <Box sx={{ p: 3 }}>
-                            <Box sx={{ 
-                                display: 'grid',
-                                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                                gap: 3,
-                                color: config.theme.colors.text.secondary
+                        {/* Metadata Panel - Reduced width */}
+                        <Box sx={{
+                            flex: '0 0 15%', // Reduced to 15% fixed width
+                            minWidth: '180px', // Ensure minimum readable width
+                            backgroundColor: config.theme.colors.surface,
+                            borderRadius: config.theme.radius.lg,
+                            p: 2, // Reduced padding
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between'
+                        }}>
+                            {/* Metadata List */}
+                            <Box sx={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 1.5, // Slightly reduced gap
+                                overflow: 'auto',
+                                flex: '1 1 auto'
                             }}>
-                                {/* File Size (displayed first) */}
-                                <Box>
-                                    <Box sx={{ 
-                                        fontSize: '0.875rem',
-                                        color: config.theme.colors.text.primary,
-                                        mb: 1
+                                {getDisplayMetadata(asset).map((item, index) => (
+                                    <Box key={index} sx={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 0.25 // Reduced gap
                                     }}>
-                                        File Size
-                                    </Box>
-                                    <Box sx={{ fontSize: '1rem' }}>
-                                        {formatMetadataValue('file_size', asset.file_size)}
-                                    </Box>
-                                </Box>
-                                
-                                {/* Other metadata */}
-                                {asset.media_metadata && Object.entries(asset.media_metadata).map(([key, value]) => (
-                                    key !== 'file_size' && (
-                                        <Box key={key}>
-                                            <Box sx={{ 
-                                                fontSize: '0.875rem',
-                                                color: config.theme.colors.text.primary,
-                                                mb: 1,
-                                                textTransform: 'capitalize'
-                                            }}>
-                                                {key.replace(/_/g, ' ')}
-                                            </Box>
-                                            <Box sx={{ fontSize: '1rem' }}>
-                                                {formatMetadataValue(key, value)}
-                                            </Box>
+                                        <Box sx={{
+                                            fontSize: '0.7rem', // Further reduced
+                                            color: config.theme.colors.text.secondary,
+                                            fontWeight: 500 // Added for better readability
+                                        }}>
+                                            {item.label}
                                         </Box>
-                                    )
+                                        <Box sx={{
+                                            fontSize: '0.75rem', // Further reduced
+                                            color: config.theme.colors.text.primary,
+                                            fontWeight: 400
+                                        }}>
+                                            {item.value}
+                                        </Box>
+                                    </Box>
                                 ))}
                             </Box>
 
-                            {/* File Path with Open in Finder */}
-                            <Box sx={{ 
-                                mt: 3,
-                                pt: 2,
+                            {/* Compact File Location Section with Tooltip */}
+                            <Box sx={{
+                                mt: 1.5,
+                                pt: 1.5,
                                 borderTop: `1px solid ${config.theme.colors.border}`,
                                 display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center'
+                                flexDirection: 'column',
+                                gap: 1,
+                                position: 'relative' // For tooltip positioning
                             }}>
-                                <Box sx={{ 
-                                    fontSize: '0.875rem',
-                                    color: config.theme.colors.text.secondary,
-                                    wordBreak: 'break-all',
-                                    flex: 1
-                                }}>
-                                    {asset.file_path}
-                                </Box>
                                 <button
-                                    onClick={handleOpenFolder}
+                                    onClick={() => setShowPath(!showPath)}
                                     style={{
-                                        padding: `${config.theme.spacing.sm} ${config.theme.spacing.md}`,
+                                        padding: '3px 8px',
                                         backgroundColor: 'transparent',
                                         color: config.theme.colors.text.primary,
                                         border: `1px solid ${config.theme.colors.border}`,
-                                        borderRadius: config.theme.radius.md,
+                                        borderRadius: config.theme.radius.sm,
                                         cursor: 'pointer',
-                                        marginLeft: config.theme.spacing.md,
-                                        whiteSpace: 'nowrap'
+                                        fontSize: '0.65rem',
+                                        fontFamily: config.theme.typography.fontFamily.base,
+                                        width: '100%',
+                                        transition: 'all 0.15s ease',
+                                        '&:hover': {
+                                            borderColor: config.theme.colors.hover,
+                                            color: config.theme.colors.hover
+                                        }
                                     }}
                                 >
-                                    Open in Finder
+                                    {showPath ? 'Hide file path' : 'Show file path'}
+                                </button>
+
+                                {/* Tooltip with Copy Feature */}
+                                {showPath && (
+                                    <Box sx={{
+                                        position: 'absolute',
+                                        bottom: '100%',
+                                        left: 0,
+                                        right: 0,
+                                        backgroundColor: config.theme.colors.surface,
+                                        border: `1px solid ${config.theme.colors.border}`,
+                                        borderRadius: config.theme.radius.sm,
+                                        padding: '8px',
+                                        marginBottom: '8px',
+                                        boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                                        zIndex: 10,
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '4px',
+                                        fontFamily: config.theme.typography.fontFamily.base
+                                    }}>
+                                        {/* Path Display */}
+                                        <Box sx={{
+                                            fontSize: '0.6rem',
+                                            color: config.theme.colors.text.primary,
+                                            wordBreak: 'break-all',
+                                            paddingRight: '24px',
+                                            opacity: 0.85
+                                        }}>
+                                            {asset.file_path}
+                                        </Box>
+                                        
+                                        {/* Copy Button */}
+                                        <button
+                                            onClick={() => handleCopy(asset.file_path)}
+                                            style={{
+                                                padding: '2px 6px',
+                                                backgroundColor: copied ? config.theme.colors.success : 'transparent',
+                                                color: copied ? '#000' : config.theme.colors.text.primary,
+                                                border: 'none',
+                                                borderRadius: config.theme.radius.sm,
+                                                cursor: 'pointer',
+                                                fontSize: '0.65rem',
+                                                fontFamily: config.theme.typography.fontFamily.base,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                alignSelf: 'flex-start',
+                                                transition: 'all 0.15s ease',
+                                                '&:hover': {
+                                                    color: config.theme.colors.hover
+                                                }
+                                            }}
+                                        >
+                                            {copied ? (
+                                                <>✓ Copied</>
+                                            ) : (
+                                                <>Copy path</>
+                                            )}
+                                        </button>
+                                    </Box>
+                                )}
+
+                                {/* Open Folder Button */}
+                                <button
+                                    onClick={handleOpenFolder}
+                                    style={{
+                                        padding: '3px 8px',
+                                        backgroundColor: 'transparent',
+                                        color: config.theme.colors.text.primary,
+                                        border: `1px solid ${config.theme.colors.border}`,
+                                        borderRadius: config.theme.radius.sm,
+                                        cursor: 'pointer',
+                                        fontSize: '0.65rem',
+                                        fontFamily: config.theme.typography.fontFamily.base,
+                                        width: '100%',
+                                        transition: 'all 0.15s ease',
+                                        '&:hover': {
+                                            borderColor: config.theme.colors.hover,
+                                            color: config.theme.colors.hover
+                                        }
+                                    }}
+                                >
+                                    Open
                                 </button>
                             </Box>
                         </Box>
-                    </Paper>
+                    </Box>
                 </Box>
             </Box>
         </AssetDetailsErrorBoundary>

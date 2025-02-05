@@ -9,13 +9,15 @@ const styles = {
         marginLeft: 'auto'
     },
     button: {
-        padding: config.theme.spacing.sm,
-        border: `1px solid ${config.theme.colors.border}`,
+        padding: '4px 8px', // Reduced vertical padding
+        backgroundColor: 'transparent',
+        border: '1px solid',
         borderRadius: config.theme.radius.sm,
         cursor: 'pointer',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '4px'
+        fontSize: '0.7rem',
+        transition: 'all 0.2s ease',
+        color: config.theme.colors.text.primary,
+        fontFamily: config.theme.typography.fontFamily.base
     }
 };
 
@@ -27,21 +29,19 @@ export const ViewToggle = ({ viewMode, setViewMode }) => {
                 onClick={() => setViewMode('grid')}
                 style={{
                     ...styles.button,
-                    background: viewMode === 'grid' ? config.theme.colors.primary : 'transparent',
-                    color: viewMode === 'grid' ? '#fff' : config.theme.colors.text.primary
+                    borderColor: viewMode === 'grid' ? config.theme.colors.accent : config.theme.colors.border,
                 }}
             >
-                📱 Grid
+                Grid
             </button>
             <button
                 onClick={() => setViewMode('list')}
                 style={{
                     ...styles.button,
-                    background: viewMode === 'list' ? config.theme.colors.primary : 'transparent',
-                    color: viewMode === 'list' ? '#fff' : config.theme.colors.text.primary
+                    borderColor: viewMode === 'list' ? config.theme.colors.accent : config.theme.colors.border,
                 }}
             >
-                📋 List
+                List
             </button>
         </div>
     );

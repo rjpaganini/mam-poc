@@ -71,7 +71,6 @@ def create_app(config_class: Optional[object] = None) -> Flask:
             DATA_DIR=DATA_DIR,
             ENV=os.getenv('FLASK_ENV', 'development'),
             WEBSOCKET_PING_INTERVAL=25,
-            WEBSOCKET_PING_TIMEOUT=10,
             WEBSOCKET_MAX_MESSAGE_SIZE=1024 * 1024
         )
         
@@ -105,7 +104,9 @@ def create_app(config_class: Optional[object] = None) -> Flask:
                     "Connection",
                     "Sec-WebSocket-Accept"
                 ],
-                "supports_credentials": True
+                "supports_credentials": True,
+                "max_age": 3600,  # Cache preflight requests for 1 hour
+                "vary_header": True  # Add Vary header for proper caching
             }
         })
         

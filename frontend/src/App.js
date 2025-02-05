@@ -1,41 +1,49 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { Box, CircularProgress } from '@mui/material';
+import { Routes, Route, useNavigate } from 'react-router-dom';
+import { Box, CircularProgress, ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import MediaLibrary from './components/MediaLibrary';  // Import the main MediaLibrary component
 import { AssetCard } from './components/MediaLibrary/AssetCard';
-import { ListView } from './components/MediaLibrary/ListView';
+import ListView from './components/MediaLibrary/ListView';
 import { ViewToggle } from './components/MediaLibrary/ViewToggle';
 import config from './config';
-import { formatFileSize } from './utils/formatters';
-import { openFolder } from './utils/fileUtils';
 import { assetsApi } from './services/api';
 import SystemHealth from './components/SystemHealth';
 import DirectoryManager from './components/DirectoryManager';
 import AssetDetails from './components/AssetDetails';
-import { ThemeProvider, createTheme } from '@mui/material';
+import logger from './services/logger';
+import { monitorThemeChanges } from './utils/themeDebug';
+import { createMuiTheme } from './theme';
 
-// Create theme instance
-const theme = createTheme({
-    palette: {
-        primary: {
-            main: config.theme.colors.primary,
-        },
-        background: {
-            default: config.theme.colors.background,
-            paper: config.theme.colors.surface,
-        },
-        text: {
-            primary: config.theme.colors.text.primary,
-            secondary: config.theme.colors.text.secondary,
-        },
-    },
-    spacing: (factor) => `${0.25 * factor}rem`,
-    shape: {
-        borderRadius: config.theme.radius.md,
-    },
-});
+// Create MUI theme once
+const theme = createTheme(createMuiTheme());
 
-const MAX_RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAY = 1000; // 1 second
+// Safely get nested theme values with fallbacks
+const getThemeValue = (path, fallback) => {
+    try {
+        return path.split('.').reduce((obj, key) => obj[key], config.theme) ?? fallback;
+    } catch (e) {
+        logger.warn(`Theme value not found: ${path}, using fallback`, { fallback });
+        return fallback;
+    }
+};
+
+// Log theme application with error handling
+const logThemeChange = (theme) => {
+    try {
+        logger.info('Theme configuration applied:', {
+            colors: theme.palette,
+            typography: theme.typography,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        logger.error('Failed to log theme configuration:', error);
+    }
+};
+
+// Monitor theme in development
+if (process.env.NODE_ENV === 'development') {
+    monitorThemeChanges(theme);
+}
 
 // WebSocket message types
 const WS_MESSAGE_TYPES = {
@@ -43,217 +51,210 @@ const WS_MESSAGE_TYPES = {
     SCAN_COMPLETE: 'scan_complete',
     SCAN_ERROR: 'scan_error',
     ERROR: 'error',
-    CONNECTION_STATUS: 'connection_status'
+    CONNECTION_STATUS: 'connection_status',
+    PING: 'ping',
+    PONG: 'pong'
 };
 
 // Define the function to handle WebSocket messages
 const handleWebSocketMessage = (data, callbacks) => {
     const { onScanProgress, onScanComplete, onError } = callbacks;
     
-    switch (data.type) {
-        case WS_MESSAGE_TYPES.SCAN_PROGRESS:
-            onScanProgress?.(data.message);
-            break;
-        case WS_MESSAGE_TYPES.SCAN_COMPLETE:
-            onScanComplete?.(data.data);
-            break;
-        case WS_MESSAGE_TYPES.SCAN_ERROR:
-        case WS_MESSAGE_TYPES.ERROR:
-            onError?.(data.message);
-            break;
-        case WS_MESSAGE_TYPES.CONNECTION_STATUS:
-            console.log(data.message);
-            break;
-        default:
-            console.warn('Unknown message type:', data.type);
+    try {
+        // Validate message format
+        if (!data || typeof data !== 'object' || !data.type) {
+            throw new Error('Invalid message format');
+        }
+        
+        switch (data.type) {
+            case WS_MESSAGE_TYPES.SCAN_PROGRESS:
+                onScanProgress?.(data.message);
+                break;
+            case WS_MESSAGE_TYPES.SCAN_COMPLETE:
+                onScanComplete?.(data.data);
+                break;
+            case WS_MESSAGE_TYPES.SCAN_ERROR:
+            case WS_MESSAGE_TYPES.ERROR:
+                onError?.(data.message);
+                break;
+            case WS_MESSAGE_TYPES.CONNECTION_STATUS:
+                logger.info('[WebSocket] Status:', data.message);
+                break;
+            case WS_MESSAGE_TYPES.PONG:
+                logger.debug('[WebSocket] Received pong');
+                break;
+            default:
+                logger.warn('[WebSocket] Unknown message type:', data.type);
+        }
+    } catch (error) {
+        logger.error('[WebSocket] Message handling error:', error);
+        onError?.('Failed to process WebSocket message');
     }
 };
 
-// WebSocket connection management with better error handling
+// WebSocket connection management
 const useWebSocket = (callbacks) => {
-    const [isConnected, setIsConnected] = useState(false);
-    const wsRef = useRef(null);
+    const [wsConnected, setWsConnected] = useState(false);
+    const ws = useRef(null);
     const reconnectAttempts = useRef(0);
+    const maxReconnectAttempts = 5;
     const reconnectTimeout = useRef(null);
     const pingInterval = useRef(null);
-    const maxReconnectAttempts = 5;
-    const baseDelay = 1000;
+
+    const cleanupConnection = useCallback(() => {
+        if (pingInterval.current) {
+            clearInterval(pingInterval.current);
+            pingInterval.current = null;
+        }
+        if (reconnectTimeout.current) {
+            clearTimeout(reconnectTimeout.current);
+            reconnectTimeout.current = null;
+        }
+        if (ws.current) {
+            try {
+                ws.current.close();
+            } catch (err) {
+                logger.error('[WebSocket] Error closing connection:', err);
+            }
+            ws.current = null;
+        }
+    }, []);
 
     const connect = useCallback(() => {
         try {
-            if (wsRef.current?.readyState === WebSocket.OPEN) return;
+            cleanupConnection();
 
-            // Clear existing connection and intervals
-            if (wsRef.current) {
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-            if (pingInterval.current) {
-                clearInterval(pingInterval.current);
-            }
+            const wsUrl = `ws://${config.api.host}:${config.api.port}/ws`;
+            logger.info('[WebSocket] Attempting connection to:', wsUrl);
 
-            // Determine the correct WebSocket URL
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ports = [5001, 5002]; // Try both ports
-            const host = window.location.hostname || 'localhost';
-            
-            // Function to try connecting to a specific port
-            const tryConnect = (port) => {
-                const wsUrl = `${protocol}//${host}:${port}/ws`;
-                console.log('Attempting WebSocket connection to:', wsUrl);
-                
-                return new Promise((resolve, reject) => {
-                    const ws = new WebSocket(wsUrl);
-                    
-                    // Set a connection timeout
-                    const connectionTimeout = setTimeout(() => {
-                        ws.close();
-                        reject(new Error('Connection timeout'));
-                    }, 5000);
-                    
-                    ws.onopen = () => {
-                        clearTimeout(connectionTimeout);
-                        console.log('WebSocket connected successfully to port', port);
-                        resolve(ws);
-                    };
-                    
-                    ws.onerror = () => {
-                        clearTimeout(connectionTimeout);
-                        reject(new Error(`Failed to connect to port ${port}`));
-                    };
-                });
-            };
-            
-            // Try connecting to each port in sequence
-            const attemptConnection = async () => {
-                for (const port of ports) {
-                    try {
-                        const ws = await tryConnect(port);
-                        wsRef.current = ws;
-                        setIsConnected(true);
-                        reconnectAttempts.current = 0;
-                        
-                        // Set up WebSocket handlers
-                        ws.onmessage = (event) => {
-                            try {
-                                const data = JSON.parse(event.data);
-                                if (data.type === 'pong') return; // Ignore pong responses
-                                handleWebSocketMessage(data, callbacks);
-                            } catch (error) {
-                                console.error('Error parsing WebSocket message:', error);
-                            }
-                        };
-                        
-                        ws.onclose = (event) => {
-                            clearInterval(pingInterval.current);
-                            setIsConnected(false);
-                            console.log('WebSocket disconnected:', event.code, event.reason);
-                            
-                            // Don't reconnect if closed normally or max attempts reached
-                            if (event.code === 1000 || event.code === 1001) return;
-                            
-                            if (reconnectAttempts.current < maxReconnectAttempts) {
-                                const delay = Math.min(baseDelay * Math.pow(2, reconnectAttempts.current), 10000);
-                                reconnectAttempts.current += 1;
-                                console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})`);
-                                reconnectTimeout.current = setTimeout(connect, delay);
-                            } else {
-                                console.log('Max reconnection attempts reached');
-                                callbacks.onError?.('WebSocket connection failed after maximum attempts');
-                            }
-                        };
-                        
-                        // Start ping interval
-                        pingInterval.current = setInterval(() => {
-                            if (ws.readyState === WebSocket.OPEN) {
-                                ws.send(JSON.stringify({ type: 'ping' }));
-                            }
-                        }, 20000); // Send ping every 20 seconds
-                        
-                        return; // Successfully connected
-                    } catch (error) {
-                        console.log(`Failed to connect to port ${port}:`, error.message);
-                        // Continue to next port
-                    }
+            const socket = new WebSocket(wsUrl);
+            ws.current = socket;
+
+            // Set a connection timeout
+            const connectionTimeout = setTimeout(() => {
+                if (socket.readyState !== WebSocket.OPEN) {
+                    logger.error('[WebSocket] Connection timeout');
+                    socket.close();
                 }
-                
-                // If we get here, all ports failed
-                throw new Error('Failed to connect to any available port');
-            };
-            
-            attemptConnection().catch(error => {
-                console.error('WebSocket connection failed:', error);
-                callbacks.onError?.('Failed to establish WebSocket connection');
-            });
-            
-        } catch (error) {
-            console.error('Error establishing WebSocket connection:', error);
-            setIsConnected(false);
-            callbacks.onError?.('Failed to establish WebSocket connection');
-        }
-    }, [callbacks, maxReconnectAttempts, baseDelay]);
+            }, 5000);
 
+            socket.onopen = () => {
+                clearTimeout(connectionTimeout);
+                logger.info('[WebSocket] Connection established');
+                setWsConnected(true);
+                reconnectAttempts.current = 0;
+
+                // Start ping interval
+                pingInterval.current = setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        try {
+                            socket.send(JSON.stringify({ type: WS_MESSAGE_TYPES.PING }));
+                        } catch (err) {
+                            logger.error('[WebSocket] Failed to send ping:', err);
+                            socket.close();
+                        }
+                    }
+                }, 30000); // Ping every 30 seconds
+            };
+
+            socket.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                logger.info(`[WebSocket] Connection closed: ${event.code} - ${event.reason}`);
+                setWsConnected(false);
+                cleanupConnection();
+
+                if (reconnectAttempts.current < maxReconnectAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 10000);
+                    logger.info(`[WebSocket] Attempting to reconnect in ${delay}ms...`);
+                    reconnectTimeout.current = setTimeout(() => {
+                        reconnectAttempts.current++;
+                        connect();
+                    }, delay);
+                } else {
+                    logger.error('[WebSocket] Max reconnection attempts reached');
+                }
+            };
+
+            socket.onerror = (error) => {
+                logger.error('[WebSocket] Error:', error);
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWebSocketMessage(data, callbacks);
+                } catch (error) {
+                    logger.error('[WebSocket] Failed to parse message:', error);
+                    callbacks.onError?.('Failed to process WebSocket message');
+                }
+            };
+        } catch (error) {
+            logger.error('[WebSocket] Failed to establish connection:', error);
+            if (reconnectAttempts.current < maxReconnectAttempts) {
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 10000);
+                reconnectTimeout.current = setTimeout(() => {
+                    reconnectAttempts.current++;
+                    connect();
+                }, delay);
+            }
+        }
+    }, [callbacks, cleanupConnection]);
+
+    // Initialize connection on mount and cleanup on unmount
     useEffect(() => {
         connect();
-        return () => {
-            if (reconnectTimeout.current) {
-                clearTimeout(reconnectTimeout.current);
-            }
-            if (pingInterval.current) {
-                clearInterval(pingInterval.current);
-            }
-            if (wsRef.current) {
-                wsRef.current.close(1000, 'Component unmounting');
-            }
-        };
-    }, [connect]);
+        return cleanupConnection;
+    }, [connect, cleanupConnection]);
 
-    return { isConnected, wsRef };
+    return {
+        isConnected: wsConnected,
+        reconnect: () => {
+            reconnectAttempts.current = 0;
+            connect();
+        }
+    };
 };
 
+// Updated styles using MUI theme spacing
 const styles = {
     app: {
         minHeight: '100vh',
-        backgroundColor: config.theme.colors.background,
-        color: config.theme.colors.text.primary,
-        padding: config.theme.spacing.xl
+        backgroundColor: getThemeValue('colors.background', '#000000'),
+        color: getThemeValue('colors.text.primary', '#FFFFFF')
     },
     container: {
         maxWidth: '1400px',
         margin: '0 auto'
     },
     title: {
-        color: config.theme.colors.text.primary,
-        marginBottom: config.theme.spacing.xl,
+        color: getThemeValue('colors.text.primary', '#FFFFFF'),
         textAlign: 'center'
     },
     searchSection: {
-        backgroundColor: config.theme.colors.surface,
-        padding: config.theme.spacing.lg,
-        borderRadius: config.theme.radius.lg,
-        marginBottom: config.theme.spacing.xl,
-        border: `1px solid ${config.theme.colors.border}`
+        backgroundColor: getThemeValue('colors.surface', '#111111'),
+        borderRadius: getThemeValue('radius.lg', '6px'),
+        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
+        maxWidth: '1400px',
+        margin: '0 auto'
     },
     searchBar: {
         display: 'flex',
-        gap: config.theme.spacing.md,
-        marginBottom: config.theme.spacing.lg
+        gap: 2, // MUI spacing unit
+        alignItems: 'center'
     },
     input: {
         flex: 1,
-        padding: config.theme.spacing.md,
-        backgroundColor: config.theme.colors.background,
-        border: `1px solid ${config.theme.colors.border}`,
-        borderRadius: config.theme.radius.md,
-        color: config.theme.colors.text.primary,
+        backgroundColor: getThemeValue('colors.background', '#000000'),
+        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
+        borderRadius: getThemeValue('radius.md', '4px'),
+        color: getThemeValue('colors.text.primary', '#FFFFFF'),
         fontSize: '16px'
     },
     button: {
-        padding: `${config.theme.spacing.md} ${config.theme.spacing.lg}`,
-        backgroundColor: config.theme.colors.primary,
+        backgroundColor: getThemeValue('colors.primary', '#FFFFFF'),
         color: '#fff',
         border: 'none',
-        borderRadius: config.theme.radius.md,
+        borderRadius: getThemeValue('radius.md', '4px'),
         cursor: 'pointer',
         fontSize: '16px',
         '&:hover': {
@@ -263,26 +264,24 @@ const styles = {
     grid: {
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-        gap: config.theme.spacing.lg
+        gap: 4 // MUI spacing unit
     },
     filterBar: {
         display: 'flex',
-        gap: config.theme.spacing.md,
-        marginBottom: config.theme.spacing.lg,
+        gap: 2, // MUI spacing unit
         alignItems: 'center'
     },
     select: {
-        padding: config.theme.spacing.md,
-        backgroundColor: config.theme.colors.background,
-        border: `1px solid ${config.theme.colors.border}`,
-        borderRadius: config.theme.radius.md,
-        color: config.theme.colors.text.primary,
+        backgroundColor: getThemeValue('colors.background', '#000000'),
+        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
+        borderRadius: getThemeValue('radius.md', '4px'),
+        color: getThemeValue('colors.text.primary', '#FFFFFF'),
         fontSize: '16px'
     },
     assetCard: {
-        backgroundColor: config.theme.colors.surface,
-        borderRadius: config.theme.radius.md,
-        border: `1px solid ${config.theme.colors.border}`,
+        backgroundColor: getThemeValue('colors.surface', '#111111'),
+        borderRadius: getThemeValue('radius.md', '4px'),
+        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
         overflow: 'hidden',
         cursor: 'pointer',
         transition: 'transform 0.2s, box-shadow 0.2s',
@@ -293,259 +292,45 @@ const styles = {
     },
     thumbnail: {
         position: 'relative',
-        paddingTop: '56.25%', // 16:9 aspect ratio
-        backgroundColor: config.theme.colors.background,
+        paddingTop: '56.25%',
+        backgroundColor: getThemeValue('colors.background', '#000000'),
         backgroundSize: 'cover',
         backgroundPosition: 'center',
-        borderBottom: `1px solid ${config.theme.colors.border}`
+        borderBottom: `1px solid ${getThemeValue('colors.border', '#222222')}`
     },
     cardContent: {
-        padding: config.theme.spacing.lg
+        padding: 3 // MUI spacing unit
     },
     metadataGrid: {
         display: 'grid',
         gridTemplateColumns: 'repeat(2, 1fr)',
-        gap: config.theme.spacing.sm,
-        color: config.theme.colors.text.secondary,
+        gap: 1, // MUI spacing unit
+        color: getThemeValue('colors.text.secondary', '#999999'),
         fontSize: '14px'
     },
     assetDetails: {
-        padding: config.theme.spacing.xl
+        padding: 4 // MUI spacing unit
     },
     videoContainer: {
-        marginBottom: config.theme.spacing.lg
+        marginBottom: 3 // MUI spacing unit
     },
     header: {
         display: 'flex',
         flexDirection: 'column',
-        gap: config.theme.spacing.md,
-        marginBottom: config.theme.spacing.xl
+        gap: 2, // MUI spacing unit
+        marginBottom: 4 // MUI spacing unit
     },
     logo: {
-        fontSize: config.theme.fontSize.xl,
-        color: config.theme.colors.text.primary,
+        fontSize: getThemeValue('typography.fontSize.xl', '1.25rem'),
+        color: getThemeValue('colors.text.primary', '#FFFFFF'),
         margin: 0
     }
 };
 
-// Utility functions for sorting and formatting
-const normalizeResolution = (resolution) => {
-    // Convert resolution to total pixels for comparison
-    if (!resolution || !Array.isArray(resolution)) return 0;
-    return resolution[0] * resolution[1];
-};
-
-const getFilteredAssets = (assets, searchQuery, fileTypeFilter, sortBy, sortDirection) => {
-    return assets
-        .filter(asset => 
-            (!fileTypeFilter || fileTypeFilter === 'all' || asset.media_metadata?.file_type === fileTypeFilter) &&
-            (!searchQuery.trim() || asset.title.toLowerCase().includes(searchQuery.toLowerCase()))
-        )
-        .sort((a, b) => {
-            let comparison = 0;
-            switch (sortBy) {
-                case 'title': 
-                    comparison = a.title.localeCompare(b.title);
-                    break;
-                case 'duration': 
-                    comparison = (a.media_metadata?.duration || 0) - (b.media_metadata?.duration || 0);
-                    break;
-                case 'size': 
-                    // Compare file sizes numerically
-                    const sizeA = parseFloat(a.media_metadata?.file_size) || 0;
-                    const sizeB = parseFloat(b.media_metadata?.file_size) || 0;
-                    comparison = sizeA - sizeB;
-                    break;
-                case 'fps': 
-                    // Normalize FPS values for comparison
-                    const fpsA = parseFloat(a.media_metadata?.fps) || 0;
-                    const fpsB = parseFloat(b.media_metadata?.fps) || 0;
-                    comparison = fpsA - fpsB;
-                    break;
-                case 'resolution':
-                    // Compare total pixels for resolution
-                    const resA = normalizeResolution(a.media_metadata?.resolution);
-                    const resB = normalizeResolution(b.media_metadata?.resolution);
-                    comparison = resA - resB;
-                    break;
-                default: 
-                    comparison = 0;
-            }
-            return sortDirection === 'asc' ? comparison : -comparison;
-        });
-};
-
-// Get available sort options from metadata
-const getSortOptions = (assets) => {
-    const options = new Set(['title']);
-    
-    assets.forEach(asset => {
-        if (asset.media_metadata) {
-            if (asset.media_metadata.duration) options.add('duration');
-            if (asset.media_metadata.resolution) options.add('resolution');
-            if (asset.media_metadata.fps) options.add('fps');
-            if (asset.media_metadata.file_size) options.add('size');
-        }
-    });
-    
-    return Array.from(options);
-};
-
-// Separate MediaLibrary into its own component outside App
-const MediaLibrary = ({ 
-    assets,
-    loading,
-    error,
-    searchQuery,
-    setSearchQuery,
-    sortBy,
-    setSortBy,
-    sortDirection,
-    setSortDirection,
-    viewMode,
-    setViewMode,
-    setShowDirectoryManager,
-    filteredAssets
-}) => {
-    const navigate = useNavigate();
-    const sortOptions = getSortOptions(assets);
-    
-    return (
-        <div style={styles.container}>
-            {/* Header with Logo and Scan Button */}
-            <Box sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: config.theme.spacing.lg
-            }}>
-                <h1 style={{
-                    color: config.theme.colors.primary,
-                    fontSize: config.theme.fontSize.xl,
-                    fontWeight: config.theme.fontWeight.bold,
-                    margin: 0
-                }}>
-                    valn.io
-                </h1>
-                
-                <button
-                    onClick={() => setShowDirectoryManager(true)}
-                    style={{
-                        padding: `${config.theme.spacing.sm} ${config.theme.spacing.md}`,
-                        backgroundColor: config.theme.colors.primary,
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: config.theme.radius.md,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: config.theme.spacing.sm,
-                        fontSize: '0.9rem'
-                    }}
-                >
-                    🔍 Scan Media
-                </button>
-            </Box>
-
-            <div style={styles.searchSection}>
-                <div style={styles.filterBar}>
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search media assets..."
-                        style={styles.input}
-                    />
-                    <select 
-                        value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value)}
-                        style={styles.select}
-                    >
-                        {sortOptions.map(option => (
-                            <option key={option} value={option}>
-                                Sort by: {option.charAt(0).toUpperCase() + option.slice(1)}
-                            </option>
-                        ))}
-                    </select>
-                    
-                    {/* Sort Direction Buttons */}
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                        <button
-                            onClick={() => setSortDirection('asc')}
-                            style={{
-                                padding: config.theme.spacing.sm,
-                                background: sortDirection === 'asc' ? config.theme.colors.primary : 'transparent',
-                                border: `1px solid ${config.theme.colors.border}`,
-                                borderRadius: config.theme.radius.sm,
-                                cursor: 'pointer',
-                                color: sortDirection === 'asc' ? '#fff' : config.theme.colors.text.primary,
-                            }}
-                        >
-                            ↑ Asc
-                        </button>
-                        <button
-                            onClick={() => setSortDirection('desc')}
-                            style={{
-                                padding: config.theme.spacing.sm,
-                                background: sortDirection === 'desc' ? config.theme.colors.primary : 'transparent',
-                                border: `1px solid ${config.theme.colors.border}`,
-                                borderRadius: config.theme.radius.sm,
-                                cursor: 'pointer',
-                                color: sortDirection === 'desc' ? '#fff' : config.theme.colors.text.primary,
-                            }}
-                        >
-                            ↓ Desc
-                        </button>
-                    </div>
-                    <ViewToggle 
-                        viewMode={viewMode} 
-                        setViewMode={setViewMode} 
-                    />
-                </div>
-
-                {error && (
-                    <div style={{ 
-                        color: config.theme.colors.error, 
-                        marginBottom: config.theme.spacing.md 
-                    }}>
-                        {error}
-                    </div>
-                )}
-
-                {viewMode === 'grid' ? (
-                    <div style={styles.grid}>
-                        {filteredAssets.map((asset) => (
-                            <AssetCard 
-                                key={asset.id} 
-                                asset={asset}
-                                onClick={() => navigate(`/asset/${asset.id}`, { state: { asset } })}
-                            />
-                        ))}
-                    </div>
-                ) : (
-                    <ListView assets={filteredAssets} navigate={navigate} />
-                )}
-
-                {loading && (
-                    <div style={{ textAlign: 'center', padding: config.theme.spacing.xl }}>
-                        <CircularProgress />
-                    </div>
-                )}
-
-                {!loading && filteredAssets.length === 0 && (
-                    <div style={{ 
-                        textAlign: 'center', 
-                        padding: config.theme.spacing.xl,
-                        color: config.theme.colors.text.secondary
-                    }}>
-                        {searchQuery.trim() ? 'No matching assets found' : 'No assets found'}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
-
+/**
+ * Main App component
+ * Provides theme context and routing
+ */
 function App() {
     const [assets, setAssets] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -555,6 +340,7 @@ function App() {
     const [sortDirection, setSortDirection] = useState('asc');
     const [showDirectoryManager, setShowDirectoryManager] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [selectedTags, setSelectedTags] = useState([]);
 
     // Move loadAssets definition before its usage
     const loadAssets = useCallback(async (retryCount = 0) => {
@@ -579,13 +365,20 @@ function App() {
             }).map(asset => ({
                 ...asset,
                 // Ensure required fields have default values
+                id: asset.id,
                 title: asset.title || 'Untitled',
                 description: asset.description || '',
+                file_path: asset.file_path || '',
+                file_size: Number(asset.file_size) || 0,
                 media_metadata: {
                     ...asset.media_metadata,
                     duration: Number(asset.media_metadata?.duration) || 0,
                     fps: Number(asset.media_metadata?.fps) || 0,
-                    file_size: Number(asset.media_metadata?.file_size) || 0
+                    bitrate: Number(asset.media_metadata?.bitrate) || 0,
+                    width: Number(asset.media_metadata?.width) || 0,
+                    height: Number(asset.media_metadata?.height) || 0,
+                    codec: asset.media_metadata?.codec || '',
+                    format: asset.media_metadata?.format || ''
                 }
             }));
             
@@ -593,6 +386,7 @@ function App() {
             
             // Log success for debugging
             console.log(`Loaded ${validatedAssets.length} assets successfully`);
+            console.log('Sample asset:', validatedAssets[0]); // Log first asset for debugging
             
         } catch (err) {
             console.error('Failed to load assets:', err);
@@ -611,7 +405,7 @@ function App() {
         }
     }, []);
 
-    // Now wsCallbacks can safely use loadAssets
+    // Define callbacks before using them
     const wsCallbacks = useMemo(() => ({
         onScanProgress: (message) => {
             console.log('Scan progress:', message);
@@ -627,44 +421,15 @@ function App() {
         }
     }), [loadAssets]);
 
-    const { isConnected } = useWebSocket(wsCallbacks);
+    // Pass callbacks to useWebSocket
+    const { isConnected: wsConnected, reconnect } = useWebSocket(wsCallbacks);
 
-    // Memoized filtered assets
-    const filteredAssets = useMemo(() => {
-        if (!assets?.length) return [];
-        
-        const query = searchQuery.trim().toLowerCase();
-        const filtered = query
-            ? assets.filter(asset => {
-                const title = (asset?.title || '').toLowerCase();
-                const description = (asset?.description || '').toLowerCase();
-                return title.includes(query) || description.includes(query);
-              })
-            : assets;
-
-        return filtered.sort((a, b) => {
-            const getValue = (item) => {
-                switch (sortBy) {
-                    case 'duration': return item?.media_metadata?.duration || 0;
-                    case 'resolution': return item?.media_metadata?.resolution 
-                        ? item.media_metadata.resolution[0] * item.media_metadata.resolution[1] 
-                        : 0;
-                    case 'fps': return item?.media_metadata?.fps || 0;
-                    case 'size': return item?.media_metadata?.file_size || 0;
-                    default: return item?.title || '';
-                }
-            };
-
-            const aVal = getValue(a);
-            const bVal = getValue(b);
-            
-            const comparison = typeof aVal === 'string' 
-                ? aVal.localeCompare(bVal)
-                : aVal - bVal;
-                
-            return sortDirection === 'asc' ? comparison : -comparison;
-        });
-    }, [assets, searchQuery, sortBy, sortDirection]);
+    // Use wsConnected in the UI to show connection status
+    useEffect(() => {
+        if (!wsConnected) {
+            console.warn('WebSocket disconnected - some real-time features may be unavailable');
+        }
+    }, [wsConnected]);
 
     // Load assets on mount
     useEffect(() => {
@@ -677,16 +442,120 @@ function App() {
         setShowDirectoryManager(false);
     }, [loadAssets]);
 
+    // Add effect to monitor theme changes
+    useEffect(() => {
+        if (process.env.NODE_ENV === 'development') {
+            monitorThemeChanges(theme);
+            
+            // Log when component mounts
+            logger.info('App component mounted with theme:', {
+                timestamp: new Date().toISOString()
+            });
+        }
+    }, []);  // Empty dependency array - only run on mount
+
     return (
         <ThemeProvider theme={theme}>
-            <Box sx={{ 
-                display: 'flex', 
-                flexDirection: 'column', 
-                minHeight: '100vh',
-                bgcolor: config.theme.colors.background
-            }}>
-                <SystemHealth />
+            <CssBaseline />
+            <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', color: 'text.primary' }}>
+                {/* Draggable title bar */}
+                <Box sx={{ 
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: '38px',
+                    WebkitAppRegion: 'drag',
+                    WebkitUserSelect: 'none',
+                    zIndex: 9999,
+                    bgcolor: 'transparent'
+                }} />
                 
+                {/* Main Header */}
+                <Box sx={{
+                    position: 'sticky',
+                    top: 0,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-end',
+                    px: 3,
+                    py: 2,
+                    mt: '38px',
+                    bgcolor: 'background.default',
+                    borderBottom: '1px solid',
+                    borderColor: 'divider',
+                    zIndex: 1000
+                }}>
+                    {/* Logo */}
+                    <Box sx={{ 
+                        position: 'absolute',
+                        left: '25%',
+                        transform: 'translateX(-50%)',
+                        display: 'flex',
+                        alignItems: 'flex-end',
+                        WebkitAppRegion: 'no-drag',
+                        zIndex: 1
+                    }}>
+                        <Box component="h1" sx={{
+                            color: 'text.primary',
+                            fontSize: '0.9rem !important',
+                            fontWeight: 'medium',
+                            m: 0,
+                            opacity: 0.9,
+                            whiteSpace: 'nowrap',
+                            fontFamily: theme => theme.typography.fontFamily.base,
+                            textTransform: 'none'
+                        }}>
+                            valn.io
+                        </Box>
+                    </Box>
+
+                    {/* Layout spacer */}
+                    <Box sx={{ width: '100px' }} />
+
+                    {/* Controls */}
+                    <Box sx={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: 2,
+                        WebkitAppRegion: 'no-drag',
+                        zIndex: 2
+                    }}>
+                        {/* Scan Media Button - Minimalist black with white border */}
+                        <Box
+                            component="button"
+                            onClick={() => setShowDirectoryManager(true)}
+                            sx={{
+                                px: 1.5,
+                                py: 0.5,
+                                height: '24px',
+                                bgcolor: 'primary.main',
+                                color: 'text.primary',
+                                border: '1px solid',
+                                borderColor: 'text.primary',
+                                borderRadius: 1,
+                                cursor: 'pointer',
+                                fontSize: '0.7rem',
+                                fontWeight: 'medium',
+                                transition: 'all 0.2s ease',
+                                '&:hover, &:focus': {
+                                    borderColor: 'error.main',
+                                    outline: 'none'
+                                },
+                                '&:active': {
+                                    borderColor: 'error.main',
+                                    transform: 'translateY(1px)'
+                                }
+                            }}
+                        >
+                            SCAN MEDIA
+                        </Box>
+
+                        <SystemHealth wsConnected={wsConnected} />
+                    </Box>
+                </Box>
+
+                {/* Main content */}
                 <Box sx={{ flex: 1, p: 2 }}>
                     <Routes>
                         <Route path="/" element={
@@ -703,7 +572,8 @@ function App() {
                                 viewMode={viewMode}
                                 setViewMode={setViewMode}
                                 setShowDirectoryManager={setShowDirectoryManager}
-                                filteredAssets={filteredAssets}
+                                selectedTags={selectedTags}
+                                setSelectedTags={setSelectedTags}
                             />
                         } />
                         <Route path="/asset/:id" element={<AssetDetails />} />
@@ -769,18 +639,6 @@ const DirectoryManagerModal = ({ onClose, onScanComplete }) => (
             <DirectoryManager onScanComplete={onScanComplete} />
         </Box>
     </Box>
-);
-
-// Example component for rendering a thumbnail
-const Thumbnail = ({ url, alt }) => (
-    <div style={{ width: '100%', height: 'auto' }}>
-        <img 
-            src={url} 
-            alt={alt} 
-            style={{ width: '100%', height: 'auto' }} 
-            onError={(e) => e.target.src = 'path/to/placeholder.png'} // Fallback image
-        />
-    </div>
 );
 
 export default App;

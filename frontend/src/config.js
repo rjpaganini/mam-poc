@@ -1,44 +1,43 @@
 // frontend/src/config.js
 // Central configuration for the frontend application
 
-// Get API port from environment or try common development ports
-const getAPIPort = () => {
-    const envPort = process.env.REACT_APP_API_PORT;
-    if (envPort) return envPort;
-    return 5001;  // Default to 5001
-};
+// Get API port from environment or use default
+const getAPIPort = () => process.env.REACT_APP_API_PORT || 5001;
 
+// Get API host from environment or use default
+const getAPIHost = () => process.env.REACT_APP_API_HOST || 'localhost';
+
+// Build base URLs using host and port
 const API_PORT = getAPIPort();
-const API_HOST = process.env.REACT_APP_API_HOST || 'localhost';
+const API_HOST = getAPIHost();
 const API_BASE = `http://${API_HOST}:${API_PORT}`;
-const WS_BASE = `ws://${API_HOST}:${API_PORT}`;  // WebSocket should use same port as API
+const WS_BASE = `ws://${API_HOST}:${API_PORT}`;
 
 const config = {
-    // API Configuration
+    // API Configuration - all endpoints and connection settings
     api: {
-        host: process.env.REACT_APP_API_HOST || 'localhost',
-        port: parseInt(process.env.REACT_APP_API_PORT || '5001', 10),
-        get baseURL() {
-            return `http://${this.host}:${this.port}`;
-        },
-        wsURL: WS_BASE,  // Add WebSocket base URL
-        get mediaURL() {
-            return `${this.baseURL}/api/v1/media`;  // Add api/v1 prefix to match backend route
-        },
-        get thumbnailURL() {
-            return `${this.baseURL}/api/v1/thumbnails`;  // Add api/v1 prefix for thumbnails
-        },
+        // Core connection settings
+        port: API_PORT,
+        host: API_HOST,
+        baseURL: API_BASE,
+        wsURL: `${WS_BASE}/ws`,  // Fixed WebSocket endpoint
+        mediaURL: `${API_BASE}/api/v1/media`,  // Add explicit mediaURL
+        thumbnailURL: `${API_BASE}/api/v1/thumbnails`,  // Add explicit thumbnailURL
+        
+        // API endpoints - all prefixed with /api/v1
         endpoints: {
+            health: '/api/v1/health/status',  // Fixed health endpoint
             assets: '/api/v1/assets',
-            directories: '/api/v1/directories',
+            media: '/api/v1/media',
+            thumbnails: '/api/v1/thumbnails',
             scan: '/api/v1/scan',
-            health: '/api/v1/health',
-            openFolder: '/api/v1/open-folder',
-            ws: '/ws'  // WebSocket endpoint
+            debug: '/api/v1/debug/paths'
         },
-        timeout: 30000,
-        retryAttempts: 3,
-        retryDelay: 1000
+        
+        // Connection settings
+        timeout: 30000,        // 30 second timeout
+        retryAttempts: 3,      // Number of retry attempts
+        retryDelay: 1000      // Delay between retries in ms
     },
 
     // Media Configuration
@@ -49,42 +48,57 @@ const config = {
 
     // UI Configuration
     theme: {
+        // Colors
         colors: {
-            primary: '#6366f1',
-            background: '#1a1a1a',
-            surface: '#2a2a2a',
-            surfaceHover: '#383838',
-            border: '#404040',
+            background: '#000000',
+            surface: '#111111',
+            border: '#222222',
+            hover: '#FF0000', // Bright red for hover states
             text: {
-                primary: '#ffffff',
-                secondary: '#a3a3a3'
+                primary: '#FFFFFF',
+                secondary: '#999999'
             },
-            error: '#ef4444',
-            success: '#22c55e',
-            warning: '#ff9800',
+            primary: '#FFFFFF',
+            accent: '#FF0000',
+            success: '#00FF00',
+            warning: '#FFC107',
+            error: '#FF0000'
         },
+        
+        // Typography configuration
+        typography: {
+            fontFamily: {
+                base: 'Menlo, Monaco, "Courier New", monospace',
+                code: 'Menlo, Monaco, "Courier New", monospace'
+            },
+            fontWeight: {
+                normal: 400,
+                medium: 500,
+                bold: 600
+            },
+            fontSize: {
+                xs: '0.75rem',
+                sm: '0.875rem',
+                md: '1rem',
+                lg: '1.125rem',
+                xl: '1.25rem'
+            }
+        },
+        
+        // Spacing
         spacing: {
-            xs: '0.25rem',
-            sm: '0.5rem',
-            md: '1rem',
-            lg: '1.5rem',
-            xl: '2rem'
+            xs: '4px',
+            sm: '8px',
+            md: '16px',
+            lg: '32px',
+            xl: '64px'
         },
+        
+        // Border radius
         radius: {
-            sm: '0.25rem',
-            md: '0.5rem',
-            lg: '0.75rem'
-        },
-        fontSize: {
-            sm: '0.875rem',
-            md: '1rem',
-            lg: '1.25rem',
-            xl: '1.5rem'
-        },
-        fontWeight: {
-            normal: 400,
-            medium: 500,
-            bold: 700
+            sm: '2px',
+            md: '4px',
+            lg: '6px'
         }
     },
 
@@ -93,7 +107,9 @@ const config = {
             status: 5000,  // 5 seconds
             logs: 10000    // 10 seconds
         }
-    }
+    },
+
+    debug: process.env.REACT_APP_DEBUG === 'true',
 };
 
 export default config; 

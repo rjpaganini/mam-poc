@@ -1,3 +1,30 @@
+/**
+ * @file: MediaLibrary.js
+ * @type: Page Component
+ * @description: Main page component for the Media Asset Management system.
+ * 
+ * This is the primary entry point for the media library interface. It serves as a container
+ * for displaying and managing media assets. Key responsibilities include:
+ * 
+ * - Fetching and displaying the list of media assets
+ * - Managing the grid/list view layout
+ * - Handling asset selection and navigation
+ * - Managing loading and error states
+ * - Coordinating between child components (MediaGrid, DirectoryManager, etc.)
+ * 
+ * @hierarchy
+ * App
+ * └─ MediaLibrary (this file)
+ *    ├─ Header
+ *    ├─ DirectoryManager
+ *    └─ MediaGrid
+ * 
+ * @dependencies
+ * - styled-components: For component styling
+ * - MediaGrid: Component for displaying assets in grid layout
+ * - config: Global configuration settings
+ */
+
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import MediaGrid from '../components/MediaGrid';

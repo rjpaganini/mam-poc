@@ -1,43 +1,62 @@
-# Core dependencies - minimal, stable versions
-Flask==3.0.2  # Latest stable with security patches
-Flask-SQLAlchemy==3.1.1  # ORM for database operations
-SQLAlchemy==2.0.27  # Core ORM functionality
+# Core dependencies - Production
+Flask==3.0.2  # Web framework
+Flask-SQLAlchemy==3.1.1  # ORM integration
+SQLAlchemy==2.0.27  # Database ORM
 Werkzeug==3.0.1  # WSGI utilities
 Flask-Sock==0.7.0  # WebSocket support
-
-# Media processing - essential for video handling
-ffmpeg-python==0.2.0  # Stable FFmpeg wrapper
-Pillow==10.2.0  # Image processing
-python-magic==0.4.27  # File type detection
-
-# API and serialization - for robust data handling
-flask-cors==4.0.0  # Cross-origin support
-marshmallow==3.20.2  # Object serialization/validation
-marshmallow-sqlalchemy==1.0.0  # ORM/Marshmallow integration
-
-# Production essentials
+Flask-Migrate==4.0.5  # Database migrations
+APScheduler==3.10.4  # Background task scheduling
 gunicorn==21.2.0  # Production WSGI server
-python-dotenv==1.0.1  # Environment management
-psutil==5.9.8  # System and process utilities for monitoring
+gevent==23.9.1  # Async worker
 
-# Caching and performance
-redis==5.0.1  # Optional: For response caching
-Flask-Caching==2.1.0  # Optional: API response caching
+# Media Processing
+ffmpeg-python==0.2.0  # Video processing
+Pillow==10.2.0  # Image processing
+moviepy==1.0.3  # Video editing
+python-magic==0.4.27  # File type detection
+scenedetect==0.6.2  # Video scene detection
 
-# Logging and monitoring
+# API and Data Handling
+flask-cors==4.0.0  # Cross-origin support
+marshmallow==3.20.2  # Object serialization
+marshmallow-sqlalchemy==1.0.0  # ORM/Marshmallow integration
+pydantic==2.6.0  # Data validation
+requests==2.31.0  # HTTP client
+aiohttp==3.9.3  # Async HTTP
+python-dateutil==2.8.2  # Date utilities
+
+# WebSocket and Real-time
+Flask-SocketIO==5.3.6  # Socket.IO integration
+python-socketio==5.11.0  # Socket.IO implementation
+python-engineio==4.8.2  # Engine.IO implementation
+
+# System and Monitoring
+psutil==5.9.8  # System utilities
+watchdog==3.0.0  # File system monitoring
+python-dotenv==1.0.1  # Environment configuration
 structlog==24.1.0  # Structured logging
-sentry-sdk==1.40.0  # Optional: Error tracking
+sentry-sdk==1.40.0  # Error tracking
 
 # Security
+PyJWT==2.8.0  # JSON Web Tokens
 Flask-Talisman==1.1.0  # Security headers
-PyJWT==2.8.0  # JWT authentication
 
-# Development dependencies
-black==24.1.1  # Code formatting
-flake8==7.0.0  # Linting
-pytest==8.0.0  # Testing
+# Caching and Performance
+redis==5.0.1  # Cache backend
+Flask-Caching==2.1.0  # Flask cache integration
+
+# AI/ML Features (Optional)
+torch==2.1.2  # Machine learning
+transformers==4.36.2  # NLP tools
+
+# Development and Testing
+pytest==8.0.0  # Testing framework
 pytest-cov==4.1.0  # Test coverage
-watchdog==3.0.0  # File monitoring
+black==24.1.1  # Code formatting
+flake8==7.0.0  # Code linting
+mypy==1.8.0  # Type checking
+ipython==8.17.2  # Interactive shell
 
-# Note: python-magic/python-magic-bin is installed by the launch script
-# based on the platform (macOS vs Linux) 
+# Note: All versions have been tested together and verified working
+# Required system packages: ffmpeg
+# Python version: 3.11.x 

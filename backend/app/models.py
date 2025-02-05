@@ -135,14 +135,15 @@ class MediaAsset(db.Model):
     def file_size_human(self):
         """Get human-readable file size."""
         size = float(self.file_size)  # Create a copy of the size
-        for unit in ['B', 'KB', 'MB', 'GB']:
+        for unit in ['b', 'kb', 'mb', 'gb']:
             if size < 1024:
                 return f"{size:.1f} {unit}"
             size /= 1024
-        return f"{size:.1f} TB"
+        return f"{size:.1f} tb"
     
     def to_dict(self):
         """Convert the MediaAsset to a dictionary for API responses."""
+        metadata = self.media_metadata or {}
         return {
             'id': self.id,
             'title': self.title or self.file_name,  # Fallback to filename if no title
@@ -154,9 +155,10 @@ class MediaAsset(db.Model):
             'mime_type': self.mime_type,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'media_metadata': self.media_metadata,
+            'media_metadata': metadata,
             'directory_id': self.directory_id,
-            'tags': [tag.name for tag in self.tags] if self.tags else []
+            'tags': [tag.name for tag in self.tags] if self.tags else [],
+            'thumbnail_timestamp': metadata.get('thumbnail_timestamp')
         }
 
 @event.listens_for(MediaAsset, 'before_insert')

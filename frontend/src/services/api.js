@@ -11,18 +11,16 @@ const getRetryDelay = (retryCount) => Math.min(1000 * (2 ** retryCount), 10000);
 const tryPorts = async (ports) => {
     const errors = [];
     
-    // Try common development ports
-    for (const port of [5001, 5002]) {  // Try both ports
-        try {
-            const response = await fetch(`http://localhost:${port}/api/v1/health`);
-            if (response.ok) {
-                console.log(`Successfully connected to backend on port ${port}`);
-                return port;
-            }
-        } catch (error) {
-            console.warn(`Failed to connect on port ${port}:`, error);
-            errors.push(`Port ${port}: ${error.message}`);
+    // Try only port 5001 with correct health endpoint
+    try {
+        const response = await fetch(`http://localhost:5001/api/v1/health/status`);
+        if (response.ok) {
+            console.log('Successfully connected to backend on port 5001');
+            return 5001;
         }
+    } catch (error) {
+        console.warn('Failed to connect to backend:', error);
+        errors.push(`Port 5001: ${error.message}`);
     }
     
     throw new Error(`Could not connect to backend. Attempts:\n${errors.join('\n')}`);
@@ -127,7 +125,7 @@ export const assetsApi = {
     getStatus: async () => {
         const api = await getAPI();
         try {
-            return await api.get('/health');
+            return await api.get('/health/status');
         } catch (error) {
             console.error('Health check failed:', error);
             throw error;
@@ -142,6 +140,79 @@ export const assetsApi = {
             console.error('Error fetching assets:', error);
             throw error;
         }
+    }
+};
+
+export const regenerateThumbnails = async (timestamp = 6) => {
+    try {
+        // Clear thumbnail cache first
+        const { ipcRenderer } = window.require('electron');
+        await ipcRenderer.invoke('clear-thumbnail-cache');
+        
+        // Then regenerate thumbnails with specified timestamp
+        const api = await getAPI();
+        const response = await api.post('/regenerate-thumbnails', {
+            timestamp: timestamp
+        });
+        
+        // Force reload assets to get fresh thumbnails
+        const assetsResponse = await assetsApi.loadAssets();
+        
+        // Verify thumbnails were generated with correct timestamp
+        const assets = assetsResponse.data;
+        const incorrectTimestamps = assets.filter(
+            asset => asset.thumbnail_timestamp !== timestamp
+        );
+        
+        if (incorrectTimestamps.length > 0) {
+            console.warn('Some assets have incorrect thumbnail timestamps:', incorrectTimestamps);
+        }
+        
+        return {
+            ...response.data,
+            assetsVerified: incorrectTimestamps.length === 0
+        };
+    } catch (error) {
+        console.error('Failed to regenerate thumbnails:', error);
+        throw error;
+    }
+};
+
+// Add a new function to force reload an individual asset's thumbnail
+export const reloadThumbnail = async (thumbnailUrl) => {
+    if (!thumbnailUrl) return;
+    
+    // Add both timestamp and generation time to URL
+    const timestamp = Date.now();
+    const separator = thumbnailUrl.includes('?') ? '&' : '?';
+    return `${thumbnailUrl}${separator}t=${timestamp}&gen=${timestamp}`;
+};
+
+// Add a function to get current thumbnail settings
+export const getThumbnailSettings = async () => {
+    try {
+        const api = await getAPI();
+        const response = await api.get('/assets');
+        const assets = response.data;
+        
+        // Get the most common timestamp being used
+        const timestampCounts = assets.reduce((acc, asset) => {
+            const timestamp = asset.thumbnail_timestamp;
+            acc[timestamp] = (acc[timestamp] || 0) + 1;
+            return acc;
+        }, {});
+        
+        const currentTimestamp = Object.entries(timestampCounts)
+            .sort(([,a], [,b]) => b - a)[0]?.[0] || 6;
+            
+        return {
+            currentTimestamp: Number(currentTimestamp),
+            totalAssets: assets.length,
+            timestampDistribution: timestampCounts
+        };
+    } catch (error) {
+        console.error('Failed to get thumbnail settings:', error);
+        throw error;
     }
 };
 

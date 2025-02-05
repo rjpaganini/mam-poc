@@ -3,7 +3,7 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import './index.css';
 import App from './App';
 
@@ -59,16 +59,19 @@ const routerConfig = {
     future: {
         v7_startTransition: true,
         v7_relativeSplatPath: true
-    }
+    },
+    // Add initial entry for MemoryRouter
+    initialEntries: ['/'],
+    initialIndex: 0
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
     <React.StrictMode>
         <ErrorBoundary>
-            <BrowserRouter {...routerConfig}>
+            <MemoryRouter {...routerConfig}>
                 <App />
-            </BrowserRouter>
+            </MemoryRouter>
         </ErrorBoundary>
     </React.StrictMode>
 );

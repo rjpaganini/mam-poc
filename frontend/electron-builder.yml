@@ -1,0 +1,46 @@
+appId: com.mam.app
+productName: Media Asset Manager
+copyright: Copyright © 2025
+
+directories:
+  output: dist
+  buildResources: macos/assets
+
+mac:
+  category: public.app-category.video
+  target: 
+    - dmg
+    - zip
+  icon: macos/assets/icon.icns
+  darkModeSupport: true
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: macos/entitlements.plist
+  entitlementsInherit: macos/entitlements.plist
+
+dmg:
+  icon: macos/assets/icon.icns
+  iconSize: 128
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+files:
+  - "build/**/*"
+  - "node_modules/**/*"
+  - "macos/**/*"
+  - "package.json"
+
+extraResources:
+  - from: "macos/assets"
+    to: "assets"
+    filter: ["**/*"]
+
+protocols:
+  - name: Media Asset Manager Protocol
+    schemes: 
+      - mam 

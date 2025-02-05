@@ -1,255 +1,295 @@
 #!/bin/bash
+# ==============================================================================
+# MAM Application Launcher v1.0.5
+# ==============================================================================
+# Intelligent launcher that ensures proper environment and service management
+# One-click solution for launching the entire MAM application stack
+# ==============================================================================
 
-# launch_mam.command
-# One-click launcher for Media Asset Manager
-# Author: Claude
-# Description: Launches backend server, frontend dev server, and opens the web interface
-# Usage: Double-click this file or run ./launch_mam.command
+# Ensure script is executable regardless of how it's launched
+if [[ ! -x "$0" ]]; then
+    chmod +x "$0"
+fi
 
-# Color codes for pretty output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# Get absolute paths, handling both symlinks and direct execution
+SCRIPT_LOCATION="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_LOCATION" ]; do
+    SCRIPT_LOCATION="$(readlink "$SCRIPT_LOCATION")"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_LOCATION")" && pwd)"
+SCRIPT_NAME="$(basename "$SCRIPT_LOCATION")"
 
-# Get the directory where the script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Development mode configuration
+DEV_MODE=${DEV_MODE:-true}  # Can be overridden by environment
+if [[ "$DEV_MODE" == "true" ]]; then
+    FLASK_DEBUG=1
+    FLASK_ENV="development"
+    log "INFO" "Running in DEVELOPMENT mode with auto-reloader"
+else
+    FLASK_DEBUG=0
+    FLASK_ENV="production"
+    log "INFO" "Running in PRODUCTION mode without auto-reloader"
+fi
 
-# Function to check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Function to check if Homebrew is installed (handles both Intel and M1 Macs)
-check_homebrew() {
-    if [ -f "/opt/homebrew/bin/brew" ]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-        return 0
-    elif [ -f "/usr/local/bin/brew" ]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Function to check if a port is in use
-check_port() {
-    lsof -i:$1 >/dev/null 2>&1
-    return $?
-}
-
-# Function to kill process on a port
-kill_port() {
-    lsof -ti:$1 | xargs kill -9 2>/dev/null
-}
-
-# Function to check and install system dependencies
-check_dependencies() {
-    echo -e "${BLUE}Checking system dependencies...${NC}"
+# Validate we're in the correct project structure
+validate_project_structure() {
+    local required_dirs=("backend" "frontend")
+    local required_files=("backend/requirements.txt" "frontend/package.json")
     
-    # Check for Homebrew on macOS
-    if [[ "$(uname)" == "Darwin" ]]; then
-        if ! check_homebrew; then
-            echo -e "${RED}Homebrew is required but not installed. Please install it first:${NC}"
-            echo '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "${SCRIPT_DIR}/${dir}" ]]; then
+            echo "${ERROR_PREFIX} Error: Required directory '${dir}' not found!"
+            echo "This script must be run from the MAM project root directory."
+            echo "Current location: ${SCRIPT_DIR}"
             exit 1
         fi
-        
-        # Ensure Python 3.11 is installed
-        if ! brew list python@3.11 &>/dev/null; then
-            echo -e "${BLUE}Installing Python 3.11...${NC}"
-            brew install python@3.11
+    done
+    
+    for file in "${required_files[@]}"; do
+        if [[ ! -f "${SCRIPT_DIR}/${file}" ]]; then
+            echo "${ERROR_PREFIX} Error: Required file '${file}' not found!"
+            echo "Project structure appears to be incomplete."
+            exit 1
         fi
+    done
+}
+
+# Create required directories
+mkdir -p "${SCRIPT_DIR}/pids"
+mkdir -p "${SCRIPT_DIR}/logs"
+
+# Visual feedback with emojis
+ERROR_PREFIX="🚫"
+SUCCESS_PREFIX="✅"
+INFO_PREFIX="ℹ️"
+WARN_PREFIX="⚠️"
+ROCKET_PREFIX="🚀"
+
+# Log file setup with rotation
+LOG_DIR="${SCRIPT_DIR}/logs"
+LOG_FILE="${LOG_DIR}/launcher.log"
+MAX_LOG_SIZE=$((10 * 1024 * 1024)) # 10MB
+
+# Rotate logs if too large
+if [[ -f "$LOG_FILE" ]] && [[ $(stat -f%z "$LOG_FILE") -gt $MAX_LOG_SIZE ]]; then
+    mv "$LOG_FILE" "${LOG_FILE}.old"
+fi
+
+# Enhanced logging function with timestamps and console output
+log() {
+    local level=$1
+    local message=$2
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local log_message="${timestamp} [${level}] ${message}"
+    echo "$log_message" >> "${LOG_FILE}"
+    
+    # Pretty console output
+    case $level in
+        "ERROR") echo "${ERROR_PREFIX} ${message}" ;;
+        "SUCCESS") echo "${SUCCESS_PREFIX} ${message}" ;;
+        "INFO") echo "${INFO_PREFIX} ${message}" ;;
+        "WARN") echo "${WARN_PREFIX} ${message}" ;;
+        "LAUNCH") echo "${ROCKET_PREFIX} ${message}" ;;
+    esac
+}
+
+# Check dependencies
+check_dependencies() {
+    local deps=("python3" "node" "npm" "lsof" "pkill")
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            log "ERROR" "Required dependency '$dep' not found!"
+            log "ERROR" "Please install '$dep' and try again."
+            exit 1
+        fi
+    done
+}
+
+# Check if services are already running
+check_services() {
+    local backend_port=5001
+    local frontend_port=3001
+    
+    # Check backend
+    if lsof -i:${backend_port} >/dev/null 2>&1; then
+        log "WARN" "Backend service already running on port ${backend_port} - will clean up"
+        return 0
     fi
     
-    # Check for libmagic
-    if [[ "$(uname)" == "Darwin" ]]; then
-        if ! brew list libmagic &>/dev/null; then
-            echo -e "${BLUE}Installing libmagic...${NC}"
-            brew install libmagic
-        fi
-    elif [[ "$(uname)" == "Linux" ]]; then
-        if ! command_exists file; then
-            echo -e "${BLUE}Installing libmagic...${NC}"
-            sudo apt-get update && sudo apt-get install -y libmagic1
-        fi
+    # Check frontend
+    if lsof -i:${frontend_port} >/dev/null 2>&1; then
+        log "WARN" "Frontend service already running on port ${frontend_port} - will clean up"
+        return 0
     fi
     
-    # Check for ffmpeg
-    if ! command_exists ffmpeg; then
-        echo -e "${BLUE}Installing ffmpeg...${NC}"
-        if [[ "$(uname)" == "Darwin" ]]; then
-            brew install ffmpeg
-        elif [[ "$(uname)" == "Linux" ]]; then
-            sudo apt-get update && sudo apt-get install -y ffmpeg
+    return 1
+}
+
+# Enhanced cleanup with better process management
+cleanup_services() {
+    log "INFO" "Cleaning up existing services..."
+    
+    # Kill processes on specific ports
+    for port in 5001 3001; do
+        if lsof -ti :$port >/dev/null 2>&1; then
+            log "INFO" "Killing process on port $port"
+            lsof -ti :$port | xargs kill -9 2>/dev/null || true
         fi
+    done
+    
+    # Kill any lingering processes more carefully
+    for process in "python" "node" "react-scripts" "electron"; do
+        if pgrep -f "$process" >/dev/null; then
+            log "INFO" "Killing $process processes"
+            pkill -9 -f "$process" 2>/dev/null || true
+        fi
+    done
+    
+    # Clean up pid files
+    rm -f "${SCRIPT_DIR}/pids/"*.pid 2>/dev/null || true
+    
+    # Give processes time to fully terminate
+    sleep 2
+    
+    log "SUCCESS" "Cleanup complete"
+}
+
+# Start services with better error handling
+start_services() {
+    log "LAUNCH" "Starting MAM Application Stack..."
+    
+    # Setup backend
+    cd "${SCRIPT_DIR}/backend" || {
+        log "ERROR" "Failed to access backend directory"
+        exit 1
+    }
+    
+    # Create/update virtual environment
+    if [[ ! -d ".venv" ]] || [[ ! -f ".venv/bin/activate" ]]; then
+        log "INFO" "Setting up Python virtual environment..."
+        python3 -m venv .venv
+        source .venv/bin/activate
+        pip install --upgrade pip
+        pip install -r requirements.txt
+    else
+        source .venv/bin/activate
+    fi
+    
+    # Start backend
+    log "INFO" "Starting backend service on port 5001..."
+    FLASK_APP=run.py \
+    FLASK_DEBUG=$FLASK_DEBUG \
+    FLASK_ENV=$FLASK_ENV \
+    PYTHONPATH="${SCRIPT_DIR}/backend" \
+    API_PORT=5001 \
+    "${SCRIPT_DIR}/backend/.venv/bin/python" -m flask run --port=5001 > "${LOG_DIR}/backend.log" 2>&1 &
+    echo $! > "${SCRIPT_DIR}/pids/backend.pid"
+    
+    # Setup and start frontend
+    cd "${SCRIPT_DIR}/frontend" || {
+        log "ERROR" "Failed to access frontend directory"
+        cleanup_services
+        exit 1
+    }
+    
+    # Install/update npm packages if needed
+    if [[ ! -d "node_modules" ]]; then
+        log "INFO" "Installing frontend dependencies..."
+        npm install
+    fi
+    
+    # Start frontend
+    log "INFO" "Starting frontend service on port 3001..."
+    REACT_APP_API_PORT=5001 npm start > "${LOG_DIR}/frontend.log" 2>&1 &
+    echo $! > "${SCRIPT_DIR}/pids/frontend.pid"
+    
+    # Start Electron (with proper waiting)
+    log "INFO" "Launching Electron application..."
+    cd "${SCRIPT_DIR}/frontend" && \
+    (sleep 5 && ELECTRON_START_URL=http://localhost:3001 npm run electron-dev > "${LOG_DIR}/electron.log" 2>&1) &
+    echo $! > "${SCRIPT_DIR}/pids/electron.pid"
+    
+    # Return to project root
+    cd "${SCRIPT_DIR}" || exit 1
+    
+    # Verify services
+    sleep 3
+    verify_services
+}
+
+# Enhanced service verification
+verify_services() {
+    local backend_running=false
+    local frontend_running=false
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        if lsof -i:5001 >/dev/null 2>&1; then
+            backend_running=true
+            log "SUCCESS" "Backend service verified on port 5001"
+            break
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                log "WARN" "Backend not detected, retrying... ($retry_count/$max_retries)"
+                sleep 2
+            fi
+        fi
+    done
+    
+    retry_count=0
+    while [ $retry_count -lt $max_retries ]; do
+        if lsof -i:3001 >/dev/null 2>&1; then
+            frontend_running=true
+            log "SUCCESS" "Frontend service verified on port 3001"
+            break
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                log "WARN" "Frontend not detected, retrying... ($retry_count/$max_retries)"
+                sleep 2
+            fi
+        fi
+    done
+    
+    if [ "$backend_running" = true ] && [ "$frontend_running" = true ]; then
+        log "SUCCESS" "All services running successfully! 🎉"
+        return 0
+    else
+        log "ERROR" "Service verification failed after $max_retries attempts"
+        cleanup_services
+        log "ERROR" "Please try running the launcher again"
+        exit 1
     fi
 }
 
-echo -e "${BLUE}🚀 Starting Media Asset Manager...${NC}"
+# Main execution
+clear # Clear terminal for better visibility
+echo "==============================================="
+echo "🚀 MAM Application Launcher v1.0.5"
+echo "==============================================="
 
-# Check system dependencies first
+# Validate project structure
+validate_project_structure
+
+# Check dependencies
 check_dependencies
 
-# Clean up any existing processes
-echo -e "${BLUE}Cleaning up existing processes...${NC}"
-if check_port 5001; then
-    echo -e "${BLUE}Cleaning up backend on port 5001...${NC}"
-    kill_port 5001
-fi
-if check_port 3001; then
-    echo -e "${BLUE}Cleaning up frontend on port 3001...${NC}"
-    kill_port 3001
-fi
+# Always clean up first
+cleanup_services
 
-# Navigate to project directory
-cd "$SCRIPT_DIR"
+# Start all services fresh
+start_services
 
-# Start backend server
-echo -e "${BLUE}Starting backend server...${NC}"
-cd backend
+# Print final status
+log "LAUNCH" "MAM Application Stack is ready!"
+log "INFO" "Backend: http://localhost:5001"
+log "INFO" "Frontend: http://localhost:3001"
+log "INFO" "Logs: ${LOG_DIR}"
 
-# Create and activate virtual environment if needed
-source .venv/bin/activate 2>/dev/null || {
-    echo -e "${BLUE}Creating virtual environment...${NC}"
-    if [[ "$(uname)" == "Darwin" ]]; then
-        # Use Python 3.11 specifically on macOS
-        /opt/homebrew/opt/python@3.11/bin/python3.11 -m venv .venv
-    else
-        python3.11 -m venv .venv
-    fi
-    source .venv/bin/activate
-    
-    echo -e "${BLUE}Installing backend dependencies...${NC}"
-    pip install --upgrade pip
-    
-    # Install python-magic with libmagic
-    if [[ "$(uname)" == "Darwin" ]]; then
-        echo -e "${BLUE}Installing libmagic and python-magic for macOS...${NC}"
-        brew install libmagic
-        export CFLAGS="-I/opt/homebrew/include"
-        export LDFLAGS="-L/opt/homebrew/lib"
-        pip install python-magic
-    else
-        echo -e "${BLUE}Installing python-magic for Linux...${NC}"
-        pip install python-magic
-    fi
-    
-    # Now install the rest of the requirements
-    pip install -r requirements.txt
-}
-
-# If virtual env exists but magic isn't installed, install it
-if ! python3 -c "import magic" 2>/dev/null; then
-    echo -e "${BLUE}Installing missing python-magic package...${NC}"
-    if [[ "$(uname)" == "Darwin" ]]; then
-        brew install libmagic
-        export CFLAGS="-I/opt/homebrew/include"
-        export LDFLAGS="-L/opt/homebrew/lib"
-    fi
-    pip install python-magic
-fi
-
-# Ensure .env file exists
-if [ ! -f ".env" ]; then
-    echo -e "${BLUE}Creating default .env file...${NC}"
-    echo "FLASK_APP=app" > .env
-    echo "FLASK_ENV=development" >> .env
-    echo "MEDIA_BASE_PATH=\"$HOME/Documents/media\"" >> .env
-    mkdir -p "$HOME/Documents/media"
-fi
-
-python run.py &
-BACKEND_PID=$!
-
-# Wait for backend to be ready (max 30 seconds)
-echo -e "${BLUE}Waiting for backend to start...${NC}"
-COUNTER=0
-until $(curl --output /dev/null --silent --head --fail http://localhost:5001/api/v1/health); do
-    printf '.'
-    sleep 1
-    COUNTER=$((COUNTER + 1))
-    if [ $COUNTER -gt 30 ]; then
-        echo -e "${RED}Backend failed to start within 30 seconds${NC}"
-        echo -e "${RED}Check the logs above for errors${NC}"
-        kill $BACKEND_PID 2>/dev/null
-        exit 1
-    fi
-done
-echo -e "${GREEN}Backend ready!${NC}"
-
-# Start frontend
-echo -e "${BLUE}Starting frontend...${NC}"
-cd ../frontend
-# Check if node_modules exists
-if [ ! -d "node_modules" ]; then
-    echo -e "${BLUE}Installing frontend dependencies...${NC}"
-    npm install
-fi
-
-# Ensure frontend .env exists
-if [ ! -f ".env" ]; then
-    echo -e "${BLUE}Creating frontend .env file...${NC}"
-    echo "PORT=3001" > .env
-    echo "REACT_APP_API_PORT=5001" >> .env
-    echo "REACT_APP_API_HOST=localhost" >> .env
-fi
-
-npm start &
-FRONTEND_PID=$!
-
-# Wait for frontend to be ready (max 60 seconds)
-echo -e "${BLUE}Waiting for frontend to start...${NC}"
-COUNTER=0
-until $(curl --output /dev/null --silent --head --fail http://localhost:3001); do
-    printf '.'
-    sleep 1
-    COUNTER=$((COUNTER + 1))
-    if [ $COUNTER -gt 60 ]; then
-        echo -e "${RED}Frontend failed to start within 60 seconds${NC}"
-        kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
-        exit 1
-    fi
-done
-echo -e "${GREEN}Frontend ready!${NC}"
-
-# Wait a moment for services to stabilize
-sleep 2
-
-# Open web interface (platform-specific)
-echo -e "${GREEN}Opening web interface...${NC}"
-case "$(uname)" in
-    "Darwin") # macOS
-        open -a "Google Chrome" --args --new-window "http://localhost:3001"
-        ;;
-    "Linux")
-        xdg-open "http://localhost:3001"
-        ;;
-    "MINGW"*|"MSYS"*|"CYGWIN"*) # Windows
-        start chrome --new-window "http://localhost:3001"
-        ;;
-    *)
-        echo -e "${RED}Unsupported platform. Please open http://localhost:3001 manually${NC}"
-        ;;
-esac
-
-# Show status
-echo -e "${GREEN}✨ Media Asset Manager is running!${NC}"
-echo -e "${BLUE}Backend URL: ${NC}http://localhost:5001"
-echo -e "${BLUE}Frontend URL: ${NC}http://localhost:3001"
-echo -e "${BLUE}Press Ctrl+C to stop all services${NC}"
-
-# Handle script termination
-cleanup() {
-    echo -e "\n${BLUE}Shutting down services...${NC}"
-    kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
-    kill_port 5001
-    kill_port 3001
-    echo -e "${GREEN}All services stopped${NC}"
-    exit 0
-}
-trap cleanup EXIT INT TERM
-
-# Keep script running
-wait 
+# Keep the terminal window open if there's an error
+if [ $? -ne 0 ]; then
+    log "ERROR" "Press any key to close this window..."
+    read -n 1
+fi 

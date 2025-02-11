@@ -46,13 +46,15 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Box, Paper, CircularProgress } from '@mui/material';
+import { Box, Paper, CircularProgress, Typography, LinearProgress, Tooltip, Grid, Button } from '@mui/material';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import config from '../config';
 import { openFolder } from '../utils/fileUtils';
 import logger from '../services/logger';
 import { assetsApi } from '../services/api';
 import { formatFileSize } from '../utils/formatters';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell } from 'recharts';
+import { PlayArrow } from '@mui/icons-material';
 
 // Error boundary for asset details
 class AssetDetailsErrorBoundary extends React.Component {
@@ -75,9 +77,9 @@ class AssetDetailsErrorBoundary extends React.Component {
             return (
                 <Box sx={{
                     p: 3,
-                    bgcolor: config.theme.colors.surface,
-                    borderRadius: config.theme.radius.lg,
-                    color: config.theme.colors.error
+                    bgcolor: 'background.paper',
+                    borderRadius: 1,
+                    color: 'error.main'
                 }}>
                     <h2>Something went wrong</h2>
                     <p>Failed to display asset details. Please try refreshing the page.</p>
@@ -101,6 +103,26 @@ const AssetDetails = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [showPath, setShowPath] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [error, setError] = useState(null);
+    const [videoUrl, setVideoUrl] = useState('');
+
+    // Define fetchAsset function at component level
+    const fetchAsset = async () => {
+        try {
+            const response = await fetch(`${config.api.baseURL}/assets/${id}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            setAsset(data);
+            setIsLoading(false);
+        } catch (error) {
+            console.error('Error fetching asset:', error);
+            setError(error.message);
+            setIsLoading(false);
+        }
+    };
 
     // Add keyboard shortcut for navigation
     useEffect(() => {
@@ -115,46 +137,23 @@ const AssetDetails = () => {
         return () => window.removeEventListener('keydown', handleKeyPress);
     }, [navigate]);
 
-    // Fetch asset data
+    // Fetch asset data on component mount
     useEffect(() => {
-        const fetchAsset = async () => {
-            try {
-                setIsLoading(true);
-                // Try to fetch the specific asset first
-                const response = await fetch(`${config.api.baseURL}/api/v1/assets/${id}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                setAsset(data);
-                logger.info('Asset details loaded', {
-                    assetId: data.id,
-                    title: data.title
-                });
-            } catch (error) {
-                logger.error('Failed to fetch asset data', {
-                    error,
-                    assetId: id
-                });
-                // Fallback to using the passed state if available
-                if (!asset && state?.asset) {
-                    setAsset(state.asset);
-                }
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
         fetchAsset();
     }, [id, state?.asset]);
 
     useEffect(() => {
         if (!asset) {
-            logger.warn('Asset details accessed without asset data', {
-                path: window.location.pathname,
-                state,
-                timestamp: new Date().toISOString()
-            });
+            // Only log warning if data isn't available after 2 seconds
+            const warningTimeout = setTimeout(() => {
+                logger.warn('Asset details still not available after timeout', {
+                    path: window.location.pathname,
+                    state,
+                    timestamp: new Date().toISOString()
+                });
+            }, 2000);
+            
+            return () => clearTimeout(warningTimeout);
         } else {
             logger.info('Asset details viewed', {
                 assetId: asset.id,
@@ -164,44 +163,42 @@ const AssetDetails = () => {
         }
     }, [asset, state]);
 
+    // Get video URL through the API
+    const getVideoPath = (asset) => {
+        if (!asset?.id) return '';
+        // Use the API endpoint to stream the video
+        return `http://localhost:5001/api/v1/media/asset/${asset.id}`;
+    };
+
     // Handle opening folder in Finder
-    const handleOpenFolder = async () => {
-        if (asset?.file_path) {
-            try {
-                await openFolder(asset.file_path);
-                logger.info('Folder opened successfully', {
-                    assetId: asset.id,
-                    path: asset.file_path
-                });
-            } catch (error) {
-                logger.error('Failed to open folder', error, {
-                    assetId: asset.id,
-                    path: asset.file_path
-                });
-            }
+    const handleOpenFolder = () => {
+        if (!asset?.file_path) {
+            logger.warn('Cannot open folder: No file path available', {
+                assetId: asset?.id,
+                title: asset?.title
+            });
+            return;
+        }
+        
+        try {
+            openFolder(asset.file_path);
+            logger.info('Opening folder for asset', {
+                assetId: asset.id,
+                path: asset.file_path
+            });
+        } catch (error) {
+            logger.error('Failed to open folder:', error, {
+                assetId: asset.id,
+                path: asset.file_path
+            });
         }
     };
 
-    // Handle video loading events
-    const handleVideoLoad = () => {
-        setIsLoading(false);
-        logger.info('Video loaded in details view', {
-            assetId: asset.id,
-            title: asset.title
-        });
-    };
-
+    // Simplified error handling
     const handleVideoError = (event) => {
         const error = event.target.error;
         setVideoError(error);
-        setIsLoading(false);
-        logger.error('Video playback error', error, {
-            assetId: asset.id,
-            mediaError: {
-                code: error.code,
-                message: error.message
-            }
-        });
+        logger.error('Video playback error:', error);
     };
 
     // Handle copy to clipboard with visual feedback
@@ -273,12 +270,11 @@ const AssetDetails = () => {
 
     // Filter and transform metadata for display
     const getDisplayMetadata = (asset) => {
-        if (!asset || !asset.media_metadata) return [];
+        if (!asset) return [];
         
-        const metadata = asset.media_metadata;
         const displayItems = [];
         
-        // 1. File Size (use root level file_size)
+        // 1. File Size
         if (asset.file_size) {
             displayItems.push({
                 label: 'File Size',
@@ -286,59 +282,59 @@ const AssetDetails = () => {
             });
         }
         
-        // 2. Resolution (combine width and height)
-        if (metadata.width && metadata.height) {
+        // 2. Resolution
+        if (asset.width && asset.height) {
             displayItems.push({
                 label: 'Resolution',
-                value: `${metadata.width}×${metadata.height}`
+                value: `${asset.width}×${asset.height}`
             });
         }
         
         // 3. Duration
-        if (metadata.duration) {
+        if (asset.duration) {
             displayItems.push({
                 label: 'Duration',
-                value: formatMetadataValue('duration', metadata.duration)
+                value: formatMetadataValue('duration', asset.duration)
             });
         }
         
         // 4. Frame Rate
-        if (metadata.fps) {
+        if (asset.fps) {
             displayItems.push({
                 label: 'Frame Rate',
-                value: formatMetadataValue('fps', metadata.fps)
+                value: formatMetadataValue('fps', asset.fps)
             });
         }
         
-        // 5. Video Codec (separated from container format)
-        if (metadata.codec) {
+        // 5. Video Codec
+        if (asset.codec) {
             displayItems.push({
                 label: 'Codec',
-                value: metadata.codec.toUpperCase()
+                value: asset.codec.toUpperCase()
             });
         }
-
-        // 6. Container Format (file extension)
-        if (asset.file_path) {
+        
+        // 6. Container Format
+        if (asset.container_format) {
             displayItems.push({
                 label: 'Format',
-                value: asset.file_path.split('.').pop().toUpperCase()
+                value: asset.container_format.toUpperCase()
             });
         }
         
         // 7. Video Bitrate
-        if (metadata.bitrate) {
+        if (asset.bit_rate) {
             displayItems.push({
                 label: 'Bitrate',
-                value: formatMetadataValue('bitrate', metadata.bitrate)
+                value: formatMetadataValue('bitrate', asset.bit_rate)
             });
         }
         
         // 8. Audio Information
-        if (metadata.audio) {
+        if (asset.audio_codec) {
             displayItems.push({
                 label: 'Audio',
-                value: formatMetadataValue('audio', metadata.audio)
+                value: `${asset.audio_codec.toUpperCase()} (${asset.audio_channels}ch, ${asset.audio_sample_rate}Hz)`
             });
         }
         
@@ -359,15 +355,477 @@ const AssetDetails = () => {
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: config.theme.colors.background,
+        bgcolor: 'background.default',
         overflow: 'auto',
-        padding: config.theme.spacing.lg
+        p: 3 // Using MUI's spacing units
     };
 
-    // Update video URL construction
-    const getVideoUrl = (filePath) => {
-        const filename = filePath.split('/').pop();
-        return `${config.api.mediaURL}/${encodeURIComponent(filename)}`;
+    // Helper functions for AI processing metadata
+    const getProcessingStatus = (asset) => {
+        const aiMetadata = asset?.media_metadata?.ai_metadata;
+        if (!aiMetadata) return 'Not Started';
+        if (aiMetadata.error) return 'Failed';
+        if (aiMetadata.processed_at) return 'Completed';
+        return 'Processing';
+    };
+
+    const getProcessingProgress = (asset) => {
+        const aiMetadata = asset?.media_metadata?.ai_metadata;
+        if (!aiMetadata) return 0;
+        if (aiMetadata.processed_at) return 100;
+        
+        // Calculate progress based on completed tasks
+        const tasks = ['scene_detection', 'logo_detection', 'object_detection', 'face_detection'];
+        const completedTasks = tasks.filter(task => aiMetadata[task]?.completed).length;
+        return (completedTasks / tasks.length) * 100;
+    };
+
+    // AIProcessingPanel: Displays AI processing status and controls
+    // Layout structure:
+    // ┌─────────────────────────────────┐
+    // │     AI Video Processing         │
+    // │     [Process Button]            │
+    // │     Status: Not Started (0%)    │
+    // │     [Progress Bar]              │
+    // │  ┌─────────────┐ ┌────────────┐ │
+    // │  │ Scenes: 0   │ │ Logo: 0%   │ │
+    // │  └─────────────┘ └────────────┘ │
+    // │  ┌─────────────┐ ┌────────────┐ │
+    // │  │ Objects: 0  │ │ Faces: 0   │ │
+    // │  └─────────────┘ └────────────┘ │
+    // └─────────────────────────────────┘
+    const AIProcessingPanel = ({ asset, onStartProcessing }) => {
+        const status = getProcessingStatus(asset);
+        const progress = getProcessingProgress(asset);
+        const aiMetadata = asset?.media_metadata?.ai_metadata || {};
+
+        // Panel container with consistent padding and borders
+        return (
+            <Box 
+                sx={{ 
+                    p: 2, 
+                    bgcolor: 'background.paper',
+                    borderRadius: 1,
+                    border: '1px solid',
+                    borderColor: 'divider',
+                    mb: 2,
+                    // Ensure content stays within bounds
+                    overflow: 'hidden'
+                }}
+            >
+                {/* Title Section */}
+                <Box sx={{ 
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    gap: 1,
+                    mb: 2
+                }}>
+                    {/* Panel Title */}
+                    <Typography 
+                        variant="subtitle2" 
+                        sx={{ 
+                            fontSize: '0.7rem',
+                            fontWeight: 500,
+                            color: 'text.primary'
+                        }}
+                    >
+                        AI Video Processing
+                    </Typography>
+
+                    {/* Process Button - Only show if not started */}
+                    {status === 'Not Started' && (
+                        <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<PlayArrow sx={{ fontSize: '0.8rem' }} />}
+                            onClick={onStartProcessing}
+                            sx={{ 
+                                alignSelf: 'flex-start',
+                                minWidth: 'auto',
+                                height: '22px',
+                                fontSize: '0.6rem',
+                                padding: '2px 8px',
+                                borderColor: 'divider',
+                                color: 'text.primary',
+                                textTransform: 'none',
+                                '&:hover': {
+                                    borderColor: 'primary.main',
+                                    bgcolor: 'transparent'
+                                }
+                            }}
+                        >
+                            Process
+                        </Button>
+                    )}
+                </Box>
+                
+                {/* Progress Section */}
+                <Box sx={{ mb: 2 }}>
+                    {/* Status and Percentage */}
+                    <Box sx={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        mb: 0.5 
+                    }}>
+                        <Typography 
+                            variant="caption" 
+                            sx={{ 
+                                fontSize: '0.6rem',
+                                color: 'text.secondary'
+                            }}
+                        >
+                            Status: {status}
+                        </Typography>
+                        <Typography 
+                            variant="caption" 
+                            sx={{ 
+                                fontSize: '0.6rem',
+                                color: 'text.secondary'
+                            }}
+                        >
+                            {Math.round(progress)}%
+                        </Typography>
+                    </Box>
+
+                    {/* Progress Bar */}
+                    <LinearProgress 
+                        variant="determinate" 
+                        value={progress}
+                        sx={{ 
+                            height: 4, 
+                            borderRadius: 2,
+                            bgcolor: 'background.default',
+                            '& .MuiLinearProgress-bar': {
+                                bgcolor: status === 'Completed' ? 'success.main' : 'primary.main'
+                            }
+                        }}
+                    />
+                </Box>
+
+                {/* Processing Results Grid */}
+                <Box sx={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: '1fr 1fr', 
+                    gap: 1.5,
+                    '& .MuiTypography-root': {  // Common typography styles
+                        fontSize: '0.6rem'
+                    }
+                }}>
+                    {/* Scene Detection Stats */}
+                    <Tooltip title="Number of distinct scenes detected in the video">
+                        <Box>
+                            <Typography 
+                                variant="caption" 
+                                color="text.secondary"
+                                sx={{ display: 'block', mb: 0.5 }}
+                            >
+                                Scenes Detected
+                            </Typography>
+                            <Typography sx={{ fontWeight: 500 }}>
+                                {aiMetadata.scene_detection?.scenes?.length || 0}
+                            </Typography>
+                        </Box>
+                    </Tooltip>
+
+                    {/* Logo Detection Stats */}
+                    <Tooltip title="Percentage of frames containing detected logos">
+                        <Box>
+                            <Typography 
+                                variant="caption" 
+                                color="text.secondary"
+                                sx={{ display: 'block', mb: 0.5 }}
+                            >
+                                Logo Coverage
+                            </Typography>
+                            <Typography sx={{ fontWeight: 500 }}>
+                                {aiMetadata.logo_detection?.coverage 
+                                    ? `${(aiMetadata.logo_detection.coverage * 100).toFixed(1)}%`
+                                    : '0%'
+                                }
+                            </Typography>
+                        </Box>
+                    </Tooltip>
+
+                    {/* Object Detection Stats */}
+                    <Tooltip title="Number of unique objects detected throughout the video">
+                        <Box>
+                            <Typography 
+                                variant="caption" 
+                                color="text.secondary"
+                                sx={{ display: 'block', mb: 0.5 }}
+                            >
+                                Objects Detected
+                            </Typography>
+                            <Typography sx={{ fontWeight: 500 }}>
+                                {aiMetadata.object_detection?.unique_objects?.length || 0}
+                            </Typography>
+                        </Box>
+                    </Tooltip>
+
+                    {/* Face Detection Stats */}
+                    <Tooltip title="Number of unique faces detected in the video">
+                        <Box>
+                            <Typography 
+                                variant="caption" 
+                                color="text.secondary"
+                                sx={{ display: 'block', mb: 0.5 }}
+                            >
+                                Faces Detected
+                            </Typography>
+                            <Typography sx={{ fontWeight: 500 }}>
+                                {aiMetadata.face_detection?.unique_faces?.length || 0}
+                            </Typography>
+                        </Box>
+                    </Tooltip>
+                </Box>
+
+                {/* Processing Timeline - Only show when processing is complete */}
+                {aiMetadata.processed_at && (
+                    <Box sx={{ 
+                        mt: 2, 
+                        pt: 2, 
+                        borderTop: '1px solid', 
+                        borderColor: 'divider',
+                        '& .MuiTypography-root': {
+                            fontSize: '0.55rem'
+                        }
+                    }}>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                            Started: {new Date(aiMetadata.started_at).toLocaleString()}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                            Completed: {new Date(aiMetadata.processed_at).toLocaleString()}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                            Duration: {((new Date(aiMetadata.processed_at) - new Date(aiMetadata.started_at)) / 1000).toFixed(1)}s
+                        </Typography>
+                    </Box>
+                )}
+
+                {/* Error Display */}
+                {aiMetadata.error && (
+                    <Box sx={{ 
+                        mt: 2, 
+                        p: 1, 
+                        bgcolor: 'error.dark',
+                        color: 'error.contrastText', 
+                        borderRadius: 1,
+                        fontSize: '0.6rem'
+                    }}>
+                        <Typography variant="caption">
+                            Error: {aiMetadata.error}
+                        </Typography>
+                    </Box>
+                )}
+            </Box>
+        );
+    };
+
+    // Add new visualization components
+    const SceneAnalysisChart = ({ scenes }) => {
+        if (!scenes?.length) return null;
+
+        // Process scene data for visualization
+        const sceneData = scenes.map((scene, index) => ({
+            id: index + 1,
+            duration: scene.duration,
+            start: scene.start_time,
+            end: scene.end_time
+        }));
+
+        return (
+            <Box sx={{ height: 200, width: '100%', mb: 3 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                    Scene Duration Analysis
+                </Typography>
+                <ResponsiveContainer>
+                    <BarChart data={sceneData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="id" label={{ value: 'Scene Number', position: 'bottom' }} />
+                        <YAxis label={{ value: 'Duration (s)', angle: -90, position: 'left' }} />
+                        <Tooltip 
+                            content={({ active, payload }) => {
+                                if (active && payload?.length) {
+                                    const data = payload[0].payload;
+                                    return (
+                                        <Box sx={{ bgcolor: 'background.paper', p: 1, border: '1px solid', borderColor: 'divider' }}>
+                                            <Typography variant="caption" display="block">
+                                                Scene {data.id}
+                                            </Typography>
+                                            <Typography variant="caption" display="block">
+                                                Duration: {data.duration.toFixed(1)}s
+                                            </Typography>
+                                            <Typography variant="caption" display="block">
+                                                Time: {data.start.toFixed(1)}s - {data.end.toFixed(1)}s
+                                            </Typography>
+                                        </Box>
+                                    );
+                                }
+                                return null;
+                            }}
+                        />
+                        <Bar dataKey="duration" fill="#8884d8" />
+                    </BarChart>
+                </ResponsiveContainer>
+            </Box>
+        );
+    };
+
+    const LogoDetectionTimeline = ({ logoData }) => {
+        if (!logoData?.logo_appearances?.length) return null;
+
+        // Process logo data for visualization
+        const timelineData = Array.from({ length: 20 }, (_, i) => ({
+            timeSegment: i * 5,
+            coverage: 0
+        }));
+
+        logoData.logo_appearances.forEach(appearance => {
+            const segment = Math.floor(appearance.timestamp / 5);
+            if (segment < timelineData.length) {
+                timelineData[segment].coverage += 1;
+            }
+        });
+
+        return (
+            <Box sx={{ height: 200, width: '100%', mb: 3 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                    Logo Presence Timeline
+                </Typography>
+                <ResponsiveContainer>
+                    <AreaChart data={timelineData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="timeSegment" label={{ value: 'Time (s)', position: 'bottom' }} />
+                        <YAxis label={{ value: 'Logo Occurrences', angle: -90, position: 'left' }} />
+                        <Tooltip />
+                        <Area type="monotone" dataKey="coverage" stroke="#82ca9d" fill="#82ca9d" />
+                    </AreaChart>
+                </ResponsiveContainer>
+            </Box>
+        );
+    };
+
+    const ProcessingActivityMonitor = ({ asset }) => {
+        const [activities, setActivities] = useState([]);
+        const maxDataPoints = 30;
+
+        // Simulate or fetch real processing activities
+        useEffect(() => {
+            if (!asset?.media_metadata?.ai_metadata?.processing_stats) return;
+
+            const stats = asset.media_metadata.ai_metadata.processing_stats;
+            const newActivities = [];
+
+            if (stats.scene_detection) {
+                newActivities.push({
+                    name: 'Scene Detection',
+                    cpu: stats.scene_detection.cpu_usage || 0,
+                    memory: stats.scene_detection.memory_usage || 0,
+                });
+            }
+            if (stats.logo_detection) {
+                newActivities.push({
+                    name: 'Logo Detection',
+                    cpu: stats.logo_detection.cpu_usage || 0,
+                    memory: stats.logo_detection.memory_usage || 0,
+                });
+            }
+
+            setActivities(newActivities);
+        }, [asset]);
+
+        if (!activities.length) return null;
+
+        return (
+            <Box sx={{ height: 200, width: '100%', mb: 3 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                    Processing Resource Usage
+                </Typography>
+                <ResponsiveContainer>
+                    <BarChart data={activities} layout="vertical">
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" domain={[0, 100]} />
+                        <YAxis dataKey="name" type="category" />
+                        <Tooltip />
+                        <Bar dataKey="cpu" name="CPU Usage %" fill="#8884d8" />
+                        <Bar dataKey="memory" name="Memory Usage %" fill="#82ca9d" />
+                    </BarChart>
+                </ResponsiveContainer>
+            </Box>
+        );
+    };
+
+    // Add new AIVisualizationPanel component
+    const AIVisualizationPanel = ({ asset }) => {
+        const aiMetadata = asset?.media_metadata?.ai_metadata;
+        
+        if (!aiMetadata) {
+            return (
+                <Box sx={{ 
+                    p: 3, 
+                    textAlign: 'center',
+                    color: 'text.secondary',
+                    borderTop: '1px solid',
+                    borderColor: 'divider',
+                    mt: 3
+                }}>
+                    <Typography>
+                        No AI processing data available
+                    </Typography>
+                </Box>
+            );
+        }
+
+        return (
+            <Box sx={{ 
+                mt: 3, 
+                pt: 3, 
+                borderTop: '1px solid', 
+                borderColor: 'divider'
+            }}>
+                <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
+                    AI Processing Analysis
+                </Typography>
+
+                <Grid container spacing={3}>
+                    <Grid item xs={12}>
+                        <ProcessingActivityMonitor asset={asset} />
+                    </Grid>
+                    
+                    <Grid item xs={12} md={6}>
+                        <SceneAnalysisChart scenes={aiMetadata.scene_detection?.scenes} />
+                    </Grid>
+                    
+                    <Grid item xs={12} md={6}>
+                        <LogoDetectionTimeline logoData={aiMetadata.logo_detection} />
+                    </Grid>
+                </Grid>
+            </Box>
+        );
+    };
+
+    // Add function to start processing
+    const handleStartProcessing = async () => {
+        try {
+            setIsProcessing(true);
+            const response = await fetch(`${config.api.baseURL}/api/v1/assets/${asset.id}/process`, {
+                method: 'POST'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to start processing: ${response.statusText}`);
+            }
+            
+            // Refresh asset data after a short delay
+            setTimeout(() => {
+                fetchAsset();
+            }, 1000);
+            
+        } catch (error) {
+            logger.error('Failed to start processing:', error);
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
     // Show loading state
@@ -396,24 +854,18 @@ const AssetDetails = () => {
                 <Box sx={{ 
                     maxWidth: '1200px', 
                     margin: '0 auto',
-                    padding: 2
+                    p: 2
                 }}>
-                    <button 
+                    <Button 
                         onClick={() => navigate('/')}
-                        style={{
-                            padding: `${config.theme.spacing.sm} ${config.theme.spacing.md}`,
-                            backgroundColor: 'transparent',
-                            color: config.theme.colors.text.primary,
-                            border: `1px solid ${config.theme.colors.border}`,
-                            borderRadius: config.theme.radius.md,
-                            cursor: 'pointer',
-                            marginBottom: config.theme.spacing.md
-                        }}
+                        variant="outlined"
+                        size="small"
+                        sx={{ mb: 2 }}
                     >
                         ← Back to Library
-                    </button>
+                    </Button>
                     <Box sx={{ 
-                        color: config.theme.colors.error,
+                        color: 'error.main',
                         textAlign: 'center',
                         mt: 4
                     }}>
@@ -441,31 +893,32 @@ const AssetDetails = () => {
                         position: 'sticky',
                         top: 0,
                         zIndex: 1,
-                        backgroundColor: config.theme.colors.background
+                        bgcolor: 'background.default'
                     }}>
-                        <button 
+                        <Button 
                             onClick={() => navigate('/')}
-                            style={{
-                                padding: '4px 8px',
-                                backgroundColor: 'transparent',
-                                color: config.theme.colors.text.primary,
-                                border: `1px solid ${config.theme.colors.border}`,
-                                borderRadius: config.theme.radius.sm,
-                                cursor: 'pointer',
+                            variant="outlined"
+                            size="small"
+                            sx={{
+                                minWidth: 'auto',
+                                p: '4px 8px',
                                 fontSize: '0.8rem'
                             }}
                         >
                             ←
-                        </button>
-                        <h1 style={{ 
-                            margin: 0,
-                            marginLeft: config.theme.spacing.md,
-                            color: config.theme.colors.text.primary,
-                            fontSize: '1.2rem',
-                            fontWeight: 500
-                        }}>
+                        </Button>
+                        <Typography 
+                            variant="h6" 
+                            sx={{ 
+                                m: 0,
+                                ml: 2,
+                                color: 'text.primary',
+                                fontSize: '1.2rem',
+                                fontWeight: 500
+                            }}
+                        >
                             {asset.title}
-                        </h1>
+                        </Typography>
                     </Box>
 
                     {/* Content Container - Side by Side Layout */}
@@ -476,9 +929,9 @@ const AssetDetails = () => {
                     }}>
                         {/* Video Player Container */}
                         <Box sx={{
-                            flex: '1 1 85%', // Increased to 85% as metadata panel reduces
-                            backgroundColor: config.theme.colors.surface,
-                            borderRadius: config.theme.radius.lg,
+                            flex: '1 1 85%',
+                            bgcolor: 'background.paper',
+                            borderRadius: 1,
                             overflow: 'hidden',
                             display: 'flex',
                             flexDirection: 'column'
@@ -486,10 +939,10 @@ const AssetDetails = () => {
                             {videoError ? (
                                 <Box sx={{
                                     p: 3,
-                                    color: config.theme.colors.error,
+                                    color: 'error.main',
                                     textAlign: 'center'
                                 }}>
-                                    Failed to load video
+                                    Failed to load video: {videoError.message}
                                 </Box>
                             ) : (
                                 <video
@@ -497,32 +950,36 @@ const AssetDetails = () => {
                                     style={{
                                         width: '100%',
                                         height: 'auto',
-                                        maxHeight: '70vh', // Reduced from 80vh
+                                        maxHeight: '70vh',
                                         backgroundColor: '#000'
                                     }}
-                                    onLoadedData={handleVideoLoad}
                                     onError={handleVideoError}
-                                    src={getVideoUrl(asset.file_path)}
+                                    src={getVideoPath(asset)}
+                                    playsInline
                                 />
                             )}
                         </Box>
 
-                        {/* Metadata Panel - Reduced width */}
+                        {/* Metadata Panel */}
                         <Box sx={{
                             flex: '0 0 15%', // Reduced to 15% fixed width
                             minWidth: '180px', // Ensure minimum readable width
-                            backgroundColor: config.theme.colors.surface,
-                            borderRadius: config.theme.radius.lg,
-                            p: 2, // Reduced padding
+                            bgcolor: 'background.paper',
+                            borderRadius: 2,
+                            p: 2,
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'space-between'
                         }}>
+                            <AIProcessingPanel 
+                                asset={asset} 
+                                onStartProcessing={handleStartProcessing}
+                            />
                             {/* Metadata List */}
                             <Box sx={{
                                 display: 'flex',
                                 flexDirection: 'column',
-                                gap: 1.5, // Slightly reduced gap
+                                gap: 1.5,
                                 overflow: 'auto',
                                 flex: '1 1 auto'
                             }}>
@@ -530,57 +987,54 @@ const AssetDetails = () => {
                                     <Box key={index} sx={{
                                         display: 'flex',
                                         flexDirection: 'column',
-                                        gap: 0.25 // Reduced gap
+                                        gap: 0.25
                                     }}>
-                                        <Box sx={{
-                                            fontSize: '0.7rem', // Further reduced
-                                            color: config.theme.colors.text.secondary,
-                                            fontWeight: 500 // Added for better readability
-                                        }}>
+                                        <Typography
+                                            variant="caption"
+                                            sx={{
+                                                fontSize: '0.7rem',
+                                                color: 'text.secondary',
+                                                fontWeight: 500
+                                            }}
+                                        >
                                             {item.label}
-                                        </Box>
-                                        <Box sx={{
-                                            fontSize: '0.75rem', // Further reduced
-                                            color: config.theme.colors.text.primary,
-                                            fontWeight: 400
-                                        }}>
+                                        </Typography>
+                                        <Typography
+                                            variant="body2"
+                                            sx={{
+                                                fontSize: '0.75rem',
+                                                color: 'text.primary',
+                                                fontWeight: 400
+                                            }}
+                                        >
                                             {item.value}
-                                        </Box>
+                                        </Typography>
                                     </Box>
                                 ))}
                             </Box>
 
-                            {/* Compact File Location Section with Tooltip */}
+                            {/* File Location Section */}
                             <Box sx={{
                                 mt: 1.5,
                                 pt: 1.5,
-                                borderTop: `1px solid ${config.theme.colors.border}`,
+                                borderTop: '1px solid',
+                                borderColor: 'divider',
                                 display: 'flex',
                                 flexDirection: 'column',
                                 gap: 1,
-                                position: 'relative' // For tooltip positioning
+                                position: 'relative'
                             }}>
-                                <button
+                                <Button
                                     onClick={() => setShowPath(!showPath)}
-                                    style={{
-                                        padding: '3px 8px',
-                                        backgroundColor: 'transparent',
-                                        color: config.theme.colors.text.primary,
-                                        border: `1px solid ${config.theme.colors.border}`,
-                                        borderRadius: config.theme.radius.sm,
-                                        cursor: 'pointer',
+                                    variant="outlined"
+                                    size="small"
+                                    sx={{
                                         fontSize: '0.65rem',
-                                        fontFamily: config.theme.typography.fontFamily.base,
-                                        width: '100%',
-                                        transition: 'all 0.15s ease',
-                                        '&:hover': {
-                                            borderColor: config.theme.colors.hover,
-                                            color: config.theme.colors.hover
-                                        }
+                                        width: '100%'
                                     }}
                                 >
                                     {showPath ? 'Hide file path' : 'Show file path'}
-                                </button>
+                                </Button>
 
                                 {/* Tooltip with Copy Feature */}
                                 {showPath && (
@@ -589,85 +1043,74 @@ const AssetDetails = () => {
                                         bottom: '100%',
                                         left: 0,
                                         right: 0,
-                                        backgroundColor: config.theme.colors.surface,
-                                        border: `1px solid ${config.theme.colors.border}`,
-                                        borderRadius: config.theme.radius.sm,
-                                        padding: '8px',
-                                        marginBottom: '8px',
-                                        boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                                        bgcolor: 'background.paper',
+                                        border: '1px solid',
+                                        borderColor: 'divider',
+                                        borderRadius: 1,
+                                        p: 1,
+                                        mb: 1,
+                                        boxShadow: 4,
                                         zIndex: 10,
                                         display: 'flex',
                                         flexDirection: 'column',
-                                        gap: '4px',
-                                        fontFamily: config.theme.typography.fontFamily.base
+                                        gap: 0.5
                                     }}>
                                         {/* Path Display */}
-                                        <Box sx={{
-                                            fontSize: '0.6rem',
-                                            color: config.theme.colors.text.primary,
-                                            wordBreak: 'break-all',
-                                            paddingRight: '24px',
-                                            opacity: 0.85
-                                        }}>
-                                            {asset.file_path}
-                                        </Box>
-                                        
-                                        {/* Copy Button */}
-                                        <button
-                                            onClick={() => handleCopy(asset.file_path)}
-                                            style={{
-                                                padding: '2px 6px',
-                                                backgroundColor: copied ? config.theme.colors.success : 'transparent',
-                                                color: copied ? '#000' : config.theme.colors.text.primary,
-                                                border: 'none',
-                                                borderRadius: config.theme.radius.sm,
-                                                cursor: 'pointer',
-                                                fontSize: '0.65rem',
-                                                fontFamily: config.theme.typography.fontFamily.base,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '4px',
-                                                alignSelf: 'flex-start',
-                                                transition: 'all 0.15s ease',
-                                                '&:hover': {
-                                                    color: config.theme.colors.hover
-                                                }
+                                        <Typography
+                                            variant="caption"
+                                            sx={{
+                                                fontSize: '0.6rem',
+                                                color: 'text.primary',
+                                                wordBreak: 'break-all',
+                                                pr: 3,
+                                                opacity: 0.85
                                             }}
                                         >
-                                            {copied ? (
-                                                <>✓ Copied</>
-                                            ) : (
-                                                <>Copy path</>
-                                            )}
-                                        </button>
+                                            {asset.file_path}
+                                        </Typography>
+
+                                        {/* Copy Button */}
+                                        <Button
+                                            onClick={() => handleCopy(asset.file_path)}
+                                            variant="text"
+                                            size="small"
+                                            color={copied ? "success" : "primary"}
+                                            sx={{
+                                                fontSize: '0.65rem',
+                                                minWidth: 'auto',
+                                                alignSelf: 'flex-start',
+                                                p: '2px 6px'
+                                            }}
+                                        >
+                                            {copied ? '✓ Copied' : 'Copy path'}
+                                        </Button>
                                     </Box>
                                 )}
 
                                 {/* Open Folder Button */}
-                                <button
+                                <Button
                                     onClick={handleOpenFolder}
-                                    style={{
-                                        padding: '3px 8px',
-                                        backgroundColor: 'transparent',
-                                        color: config.theme.colors.text.primary,
-                                        border: `1px solid ${config.theme.colors.border}`,
-                                        borderRadius: config.theme.radius.sm,
-                                        cursor: 'pointer',
+                                    variant="outlined"
+                                    size="small"
+                                    sx={{
                                         fontSize: '0.65rem',
-                                        fontFamily: config.theme.typography.fontFamily.base,
-                                        width: '100%',
-                                        transition: 'all 0.15s ease',
-                                        '&:hover': {
-                                            borderColor: config.theme.colors.hover,
-                                            color: config.theme.colors.hover
-                                        }
+                                        width: '100%'
                                     }}
                                 >
                                     Open
-                                </button>
+                                </Button>
                             </Box>
                         </Box>
                     </Box>
+                </Box>
+
+                {/* Add visualization panel under the video */}
+                <Box sx={{ 
+                    maxWidth: '1400px',
+                    margin: '0 auto',
+                    padding: 2
+                }}>
+                    <AIVisualizationPanel asset={asset} />
                 </Box>
             </Box>
         </AssetDetailsErrorBoundary>

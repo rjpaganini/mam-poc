@@ -18,7 +18,7 @@ const getFilteredAssets = (assets, searchQuery, fileTypeFilter, sortBy, sortDire
     
     return assets
         .filter(asset => 
-            (!fileTypeFilter || fileTypeFilter === 'all' || asset.media_metadata?.file_type === fileTypeFilter) &&
+            (!fileTypeFilter || fileTypeFilter === 'all' || asset.format === fileTypeFilter) &&
             (!searchQuery?.trim() || asset.title?.toLowerCase().includes(searchQuery.toLowerCase()))
         )
         .sort((a, b) => {
@@ -28,24 +28,24 @@ const getFilteredAssets = (assets, searchQuery, fileTypeFilter, sortBy, sortDire
                     comparison = (a.title || '').localeCompare(b.title || '');
                     break;
                 case 'duration': 
-                    comparison = (a.media_metadata?.duration || 0) - (b.media_metadata?.duration || 0);
+                    comparison = (a.duration || 0) - (b.duration || 0);
                     break;
                 case 'size': 
                     // Compare file sizes numerically
-                    const sizeA = parseFloat(a.media_metadata?.file_size) || 0;
-                    const sizeB = parseFloat(b.media_metadata?.file_size) || 0;
+                    const sizeA = parseFloat(a.file_size) || 0;
+                    const sizeB = parseFloat(b.file_size) || 0;
                     comparison = sizeA - sizeB;
                     break;
                 case 'fps': 
                     // Normalize FPS values for comparison
-                    const fpsA = parseFloat(a.media_metadata?.fps) || 0;
-                    const fpsB = parseFloat(b.media_metadata?.fps) || 0;
+                    const fpsA = parseFloat(a.fps) || 0;
+                    const fpsB = parseFloat(b.fps) || 0;
                     comparison = fpsA - fpsB;
                     break;
                 case 'resolution':
                     // Compare total pixels for resolution
-                    const resA = normalizeResolution(a.media_metadata?.resolution);
-                    const resB = normalizeResolution(b.media_metadata?.resolution);
+                    const resA = a.width * a.height || 0;
+                    const resB = b.width * b.height || 0;
                     comparison = resA - resB;
                     break;
                 default: 
@@ -129,12 +129,10 @@ const getSortOptions = (assets = []) => {
     if (!Array.isArray(assets)) return Array.from(options);
     
     assets.forEach(asset => {
-        if (asset?.media_metadata) {
-            if (asset.media_metadata.duration) options.add('duration');
-            if (asset.media_metadata.resolution) options.add('resolution');
-            if (asset.media_metadata.fps) options.add('fps');
-            if (asset.media_metadata.file_size) options.add('size');
-        }
+        if (asset.duration) options.add('duration');
+        if (asset.width && asset.height) options.add('resolution');
+        if (asset.fps) options.add('fps');
+        if (asset.file_size) options.add('size');
     });
     return Array.from(options);
 };

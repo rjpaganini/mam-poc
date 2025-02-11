@@ -1,49 +1,46 @@
 import React from 'react';
-import config from '../../config';
+import { Box, Button, styled } from '@mui/material';
 
-// Styles for view toggle buttons
-const styles = {
-    container: {
-        display: 'flex',
-        gap: config.theme.spacing.sm,
-        marginLeft: 'auto'
+// Styled components using MUI's system
+const ToggleButton = styled(Button)(({ theme }) => ({
+    padding: '4px 8px',
+    backgroundColor: 'transparent',
+    border: `1px solid ${theme.palette.divider}`,
+    borderRadius: theme.shape.borderRadius,
+    cursor: 'pointer',
+    fontSize: '0.7rem',
+    transition: 'all 0.2s ease',
+    color: theme.palette.text.primary,
+    fontFamily: theme.typography.fontFamily,
+    '&.active': {
+        borderColor: theme.palette.primary.main
     },
-    button: {
-        padding: '4px 8px', // Reduced vertical padding
-        backgroundColor: 'transparent',
-        border: '1px solid',
-        borderRadius: config.theme.radius.sm,
-        cursor: 'pointer',
-        fontSize: '0.7rem',
-        transition: 'all 0.2s ease',
-        color: config.theme.colors.text.primary,
-        fontFamily: config.theme.typography.fontFamily.base
+    '&:hover': {
+        backgroundColor: theme.palette.action.hover
     }
-};
+}));
 
 // ViewToggle component for switching between grid and list views
 export const ViewToggle = ({ viewMode, setViewMode }) => {
     return (
-        <div style={styles.container}>
-            <button
+        <Box sx={{ display: 'flex', gap: 1, marginLeft: 'auto' }}>
+            <ToggleButton
                 onClick={() => setViewMode('grid')}
-                style={{
-                    ...styles.button,
-                    borderColor: viewMode === 'grid' ? config.theme.colors.accent : config.theme.colors.border,
-                }}
+                className={viewMode === 'grid' ? 'active' : ''}
+                variant="outlined"
+                size="small"
             >
                 Grid
-            </button>
-            <button
+            </ToggleButton>
+            <ToggleButton
                 onClick={() => setViewMode('list')}
-                style={{
-                    ...styles.button,
-                    borderColor: viewMode === 'list' ? config.theme.colors.accent : config.theme.colors.border,
-                }}
+                className={viewMode === 'list' ? 'active' : ''}
+                variant="outlined"
+                size="small"
             >
                 List
-            </button>
-        </div>
+            </ToggleButton>
+        </Box>
     );
 };
 

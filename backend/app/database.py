@@ -1,5 +1,5 @@
 # backend/app/database.py
-# Database configuration and session management
+"""Simple SQLAlchemy database setup"""
 
 from flask_sqlalchemy import SQLAlchemy
 from flask import Flask

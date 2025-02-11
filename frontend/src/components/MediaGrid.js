@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
 import { useNavigate } from 'react-router-dom';
-import { AssetCard } from './MediaLibrary/AssetCard';
+import AssetCard from './MediaLibrary/AssetCard';
 import config from '../config';
 
 const Grid = styled.div`
@@ -48,17 +48,17 @@ const MediaGrid = ({ assets }) => {
                 comparison = (a.title || '').localeCompare(b.title || '');
                 break;
             case 'duration':
-                comparison = (a.media_metadata?.duration || 0) - (b.media_metadata?.duration || 0);
+                comparison = (a.duration || 0) - (b.duration || 0);
                 break;
             case 'fps':
-                comparison = (a.media_metadata?.fps || 0) - (b.media_metadata?.fps || 0);
+                comparison = (a.fps || 0) - (b.fps || 0);
                 break;
             case 'size':
-                comparison = (a.media_metadata?.file_size || 0) - (b.media_metadata?.file_size || 0);
+                comparison = (a.file_size || 0) - (b.file_size || 0);
                 break;
             case 'resolution':
-                const resA = (a.media_metadata?.width || 0) * (a.media_metadata?.height || 0);
-                const resB = (b.media_metadata?.width || 0) * (b.media_metadata?.height || 0);
+                const resA = (a.width || 0) * (a.height || 0);
+                const resB = (b.width || 0) * (b.height || 0);
                 comparison = resA - resB;
                 break;
             default:

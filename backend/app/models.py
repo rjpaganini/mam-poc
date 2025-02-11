@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from pathlib import Path
 from flask import current_app
 from .database import db
-from .config import SUPPORTED_EXTENSIONS
+from .config import Config
 import os
 
 # Association table for many-to-many relationship between MediaAsset and Tag
@@ -77,88 +77,92 @@ class Tag(db.Model):
 
 class MediaAsset(db.Model):
     """
-    Model representing a media asset in the system.
-    Includes metadata and file information.
+    Media asset model with enhanced metadata support.
+    Includes normalized columns for performance and rich metadata storage.
     """
     __tablename__ = 'media_assets'
 
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(255))  # Made nullable since we might use filename initially
-    description = db.Column(db.Text, nullable=True)
-    file_path = db.Column(db.String(1024), unique=True, nullable=False, index=True)
-    file_size = db.Column(db.BigInteger, nullable=False)  # Size in bytes for precision
-    mime_type = db.Column(db.String(128), nullable=False)
-    media_metadata = db.Column(db.JSON, nullable=True)
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
+    title = db.Column(db.String(255), nullable=False)
+    file_path = db.Column(db.String(1024), unique=True, nullable=False)
+    file_size = db.Column(db.BigInteger, nullable=False)
+    file_size_mb = db.Column(db.Float)  # Size in MB for display
+    format = db.Column(db.String(50))   # Container format (e.g., mp4)
     
-    # Relationship with tags
-    tags = db.relationship('Tag', secondary=asset_tags, back_populates='assets')
+    # Video metadata
+    duration = db.Column(db.Float)       # Duration in seconds
+    duration_formatted = db.Column(db.String(20))  # HH:MM:SS format
+    width = db.Column(db.Integer)        # Video width in pixels
+    height = db.Column(db.Integer)       # Video height in pixels
+    fps = db.Column(db.Float)           # Frames per second
+    codec = db.Column(db.String(50))     # Video codec (e.g., h264)
+    container_format = db.Column(db.String(50))  # Container format details
+    bit_rate = db.Column(db.Integer)    # Video bitrate
     
-    # Add relationship to directory with named foreign key constraint
-    directory_id = db.Column(
-        db.Integer, 
-        ForeignKey('media_directories.id', ondelete='SET NULL', name='fk_media_asset_directory'),
-        nullable=True
-    )
-    directory = db.relationship('MediaDirectory', backref='assets')
+    # Audio metadata
+    audio_codec = db.Column(db.String(50))      # Audio codec (e.g., aac)
+    audio_channels = db.Column(db.Integer)      # Number of audio channels
+    audio_sample_rate = db.Column(db.Integer)   # Audio sample rate
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    processing_results = db.relationship('ProcessingResult', back_populates='media_asset', lazy='dynamic')
+    tags = db.relationship('Tag', secondary=asset_tags, back_populates='assets', lazy='dynamic')
     
     @validates('file_path')
-    def validate_file_path(self, key, file_path):
-        """Ensure file exists and has valid extension."""
-        try:
-            # Use os.path instead of Path for better compatibility with Google Drive
-            if not os.path.exists(file_path):
-                current_app.logger.error(f"File not found: {file_path}")
-                raise ValueError(f"File not found: {file_path}")
-            
-            # Get extension using os.path
-            _, ext = os.path.splitext(file_path)
-            if ext.lower() not in SUPPORTED_EXTENSIONS:
-                current_app.logger.error(f"Unsupported file type: {ext}")
-                raise ValueError(f"Unsupported file type: {ext}")
-            
-            return os.path.abspath(file_path)
-        except Exception as e:
-            current_app.logger.error(f"Error validating file path: {str(e)}")
-            # Don't validate on load, only on create/update
-            if not hasattr(self, '_sa_instance_state') or self._sa_instance_state.transient:
-                raise
-            return file_path  # Return original path if validation fails during load
+    def validate_path(self, key, path):
+        """Validate file path exists and is video"""
+        path = Path(path)
+        if not path.exists():
+            raise ValueError(f"File not found: {path}")
+        if path.suffix.lower() not in Config.ALLOWED_EXTENSIONS:
+            raise ValueError(f"Invalid file type: {path.suffix}")
+        return str(path)
     
     @property
-    def file_name(self):
-        """Get file name from path."""
-        return os.path.basename(self.file_path)
+    def thumbnail_path(self) -> str:
+        """Get thumbnail path for this asset"""
+        return str(Config.THUMBNAIL_DIR / f"{self.id}.jpg")
     
-    @property
-    def file_size_human(self):
-        """Get human-readable file size."""
-        size = float(self.file_size)  # Create a copy of the size
-        for unit in ['b', 'kb', 'mb', 'gb']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} tb"
+    def get_absolute_path(self) -> Path:
+        """
+        Resolve the relative file path to an absolute path using MEDIA_PATH.
+        
+        Returns:
+            Path: Absolute path to the media file
+            
+        Example:
+            If file_path is 'media/video.mp4' and MEDIA_PATH is '/path/to/media',
+            returns '/path/to/media/video.mp4'
+        """
+        # Remove 'media/' prefix if present
+        relative_path = self.file_path.replace('media/', '', 1)
+        # Combine with MEDIA_PATH
+        return Path(Config.MEDIA_PATH) / relative_path
     
     def to_dict(self):
-        """Convert the MediaAsset to a dictionary for API responses."""
-        metadata = self.media_metadata or {}
+        """Convert to API response format with enhanced metadata"""
         return {
             'id': self.id,
-            'title': self.title or self.file_name,  # Fallback to filename if no title
-            'description': self.description,
+            'title': self.title,
             'file_path': self.file_path,
-            'file_name': self.file_name,
             'file_size': self.file_size,
-            'file_size_human': self.file_size_human,
-            'mime_type': self.mime_type,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'media_metadata': metadata,
-            'directory_id': self.directory_id,
-            'tags': [tag.name for tag in self.tags] if self.tags else [],
-            'thumbnail_timestamp': metadata.get('thumbnail_timestamp')
+            'file_size_mb': self.file_size_mb,
+            'format': self.format,
+            'duration': self.duration,
+            'duration_formatted': self.duration_formatted,
+            'width': self.width,
+            'height': self.height,
+            'fps': self.fps,
+            'codec': self.codec,
+            'container_format': self.container_format,
+            'bit_rate': self.bit_rate,
+            'audio_codec': self.audio_codec,
+            'audio_channels': self.audio_channels,
+            'audio_sample_rate': self.audio_sample_rate,
+            'thumbnail_url': f'/thumbnails/{self.id}.jpg',
+            'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
 @event.listens_for(MediaAsset, 'before_insert')
@@ -178,3 +182,32 @@ def set_updated_at(mapper, connection, target):
     except Exception as e:
         current_app.logger.error(f"Failed to set updated_at: {e}")
         raise SQLAlchemyError("Failed to process timestamp") from e
+
+class ProcessingResult(db.Model):
+    """Model for storing AI processing results."""
+    __tablename__ = 'processing_results'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, ForeignKey('media_assets.id', ondelete='CASCADE'), nullable=False)
+    processor_name = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(20), nullable=False)  # pending, processing, completed, failed
+    result_data = db.Column(db.JSON, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship with asset
+    media_asset = db.relationship('MediaAsset', back_populates='processing_results')
+    
+    def to_dict(self):
+        """Convert to API-friendly format."""
+        return {
+            'id': self.id,
+            'asset_id': self.asset_id,
+            'processor_name': self.processor_name,
+            'status': self.status,
+            'result_data': self.result_data,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }

@@ -1,103 +1,82 @@
-# health.py - System Health Monitoring
-# Purpose: Provides health check endpoints for database and WebSocket status
-
+# health.py - Basic health monitoring
 from flask import Blueprint, jsonify, current_app
 from datetime import datetime
-from sqlalchemy import text
 import logging
 from typing import Dict, Any
-from .config import API_PREFIX
-from .websocket import get_connection_stats
+from sqlalchemy import text
+from .extensions import socketio
+from .database import db
 
-# Configure module-level logger
 logger = logging.getLogger(__name__)
+health = Blueprint('health', __name__)
 
-# Create blueprint with versioned prefix
-health = Blueprint('health', __name__, url_prefix=f'{API_PREFIX}')
-
-class HealthStatus:
-    """Health status constants."""
-    HEALTHY = 'healthy'
-    DEGRADED = 'degraded'
-    ERROR = 'error'
-
-def check_database() -> Dict[str, Any]:
-    """Check database connectivity."""
+def get_database_health() -> Dict[str, Any]:
+    """Get database connectivity status"""
     try:
-        current_app.db.session.execute(text('SELECT 1'))
-        return {
-            'status': HealthStatus.HEALTHY,
-            'connected': True
-        }
+        with current_app.app_context():
+            # Use SQLAlchemy text() for raw SQL
+            result = db.session.execute(text('SELECT 1')).scalar()
+            if result != 1:
+                raise ValueError("Database check failed: unexpected result")
+            
+            # Check if we can access the merged database
+            db_path = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+            return {
+                'status': 'healthy',
+                'message': 'Connected to database',
+                'path': db_path
+            }
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         return {
-            'status': HealthStatus.ERROR,
-            'connected': False,
-            'error': str(e)
+            'status': 'error',
+            'message': str(e)
         }
 
-def check_websocket() -> Dict[str, Any]:
-    """Check WebSocket status."""
+def get_websocket_health() -> Dict[str, Any]:
+    """Get WebSocket health status"""
     try:
-        stats = get_connection_stats()
+        # Access Socket.IO server safely through the managed instance
+        server = socketio.server if hasattr(socketio, 'server') else None
+        if server and hasattr(server, 'manager'):
+            rooms = len(server.manager.rooms)
+            return {
+                'status': 'healthy',
+                'connections': rooms,
+                'protocols': ['socket.io']
+            }
+        
         return {
-            'status': HealthStatus.HEALTHY,
-            'connections': stats.get('active_connections', 0),
-            'connected': True
+            'status': 'initializing',
+            'connections': 0,
+            'protocols': ['socket.io']
         }
     except Exception as e:
-        logger.error(f"WebSocket health check failed: {e}")
+        logger.warning(f"Error getting WebSocket health: {e}")
         return {
-            'status': HealthStatus.ERROR,
-            'connected': False,
-            'error': str(e)
+            'status': 'error',
+            'message': str(e),
+            'connections': 0,
+            'protocols': ['socket.io']
         }
 
 @health.route('/health/status')
 def health_status():
-    """
-    Health check endpoint providing database and WebSocket status.
-    Returns:
-        JSON with connection statuses
-    """
+    """Health check endpoint focused on critical components"""
     try:
-        # Check database connection
-        db_status = True
-        try:
-            # Use the database instance directly
-            from .database import db
-            db.session.execute(text('SELECT 1'))
-        except Exception as e:
-            db_status = False
-            logger.error(f"Database health check failed: {e}")
+        db_health = get_database_health()
+        ws_health = get_websocket_health()
         
-        # Check WebSocket status
-        ws_status = True
-        try:
-            stats = get_connection_stats()
-        except Exception as e:
-            ws_status = False
-            logger.error(f"WebSocket check failed: {e}")
+        # Overall status is healthy only if both components are healthy
+        status = 'healthy' if (db_health['status'] == 'healthy' and 
+                             ws_health['status'] == 'healthy') else 'error'
         
-        status = {
-            'status': 'healthy' if db_status and ws_status else 'degraded',
+        return jsonify({
+            'status': status,
             'timestamp': datetime.utcnow().isoformat(),
-            'components': {
-                'database': {
-                    'status': 'healthy' if db_status else 'error',
-                    'connected': db_status
-                },
-                'websocket': {
-                    'status': 'healthy' if ws_status else 'error',
-                    'connected': ws_status,
-                    'stats': stats if ws_status else None
-                }
-            }
-        }
-        
-        return jsonify(status), 200 if db_status and ws_status else 503
-        
+            'database': db_health,
+            'websocket': ws_health
+        }), 200 if status == 'healthy' else 503
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return jsonify({
@@ -107,6 +86,6 @@ def health_status():
         }), 500
 
 def init_health(app):
-    """Initialize health monitoring."""
-    app.register_blueprint(health)
+    """Initialize health monitoring"""
+    app.register_blueprint(health, url_prefix='/api/v1')
     logger.info("Health monitoring initialized") 

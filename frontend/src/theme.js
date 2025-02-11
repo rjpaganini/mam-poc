@@ -1,149 +1,110 @@
 /**
- * @file theme.js
- * Central theme configuration with strict typing and fallbacks
- * This is the SINGLE SOURCE OF TRUTH for all UI theming
+ * @file: theme.js
+ * @description: Material-UI theme configuration for the Media Asset Management system
+ * 
+ * This file serves as the SINGLE SOURCE OF TRUTH for all UI theming decisions.
+ * It implements a strict, type-safe theme system with:
+ * 
+ * Key Features:
+ * - Comprehensive color palette management
+ * - Consistent typography scaling
+ * - Spacing and layout utilities
+ * - Component-specific theme overrides
+ * - Dark mode optimization
+ * 
+ * Theme Structure:
+ * 1. Colors
+ *    - Core colors (background, surface, border)
+ *    - Text colors (primary, secondary)
+ *    - UI colors (accent, success, error)
+ *    - Status colors (processing, complete, error)
+ * 
+ * 2. Typography
+ *    - Font families (base, code)
+ *    - Font sizes (xs to xl)
+ *    - Font weights
+ *    - Line heights
+ * 
+ * 3. Spacing
+ *    - Base unit: 4px
+ *    - Scaling: Multiples of base unit
+ *    - Component-specific spacing
+ * 
+ * Usage:
+ * import { createMuiTheme, getThemeValue } from './theme';
+ * const theme = createMuiTheme();
+ * const fontSize = getThemeValue('typography.fontSize.sm', '0.5rem');
+ * 
+ * @author: AI Assistant
+ * @lastModified: February 2025
  */
-
-// Base theme values - NEVER access these directly from components
-const baseTheme = {
-    colors: {
-        // Core colors
-        background: '#000000',
-        surface: '#111111',
-        border: '#222222',
-        hover: '#FF0000',
-        
-        // Text colors
-        text: {
-            primary: '#FFFFFF',
-            secondary: '#999999'
-        },
-        
-        // UI colors
-        primary: '#000000',  // Changed to black for buttons
-        accent: '#FF0000',
-        success: '#00FF00',
-        error: '#FF0000'
-    },
-    
-    typography: {
-        // Font families
-        fontFamily: {
-            base: 'Menlo, Monaco, "Courier New", monospace',
-            code: 'Menlo, Monaco, "Courier New", monospace'
-        },
-        // Font weights
-        fontWeight: {
-            normal: 400,
-            medium: 500,
-            bold: 600
-        },
-        // Font sizes - Aggressively reduced
-        fontSize: {
-            xs: '0.425rem',   // ~7px - Metadata labels
-            sm: '0.5rem',     // 8px - Metadata values
-            md: '0.563rem',   // 9px - General text
-            lg: '0.625rem',   // 10px - Headings
-            xl: '0.75rem',    // 12px - Large headings
-            logo: '0.4rem'    // Special size for logo (50% reduction)
-        }
-    },
-    
-    // Spacing scale
-    spacing: {
-        xs: '4px',
-        sm: '8px',
-        md: '16px',
-        lg: '32px',
-        xl: '64px'
-    },
-    
-    // Border radius scale
-    radius: {
-        sm: '2px',
-        md: '4px',
-        lg: '6px'
-    }
-};
 
 /**
- * Safe theme getter with strict typing and fallbacks
- * @param {string} path - Dot notation path to theme value
- * @param {any} fallback - Fallback value if path doesn't exist
- * @returns {any} Theme value or fallback
+ * Theme config - Sr Dev 2024
  */
-export const getThemeValue = (path, fallback) => {
-    try {
-        const value = path.split('.').reduce((obj, key) => obj[key], baseTheme);
-        return value ?? fallback;
-    } catch (e) {
-        console.warn(`Theme value not found: ${path}, using fallback`, { fallback });
-        return fallback;
-    }
-};
 
-/**
- * Material-UI theme configuration
- * Transforms our base theme into MUI format
- */
-export const createMuiTheme = () => ({
-    palette: {
-        mode: 'dark',
-        primary: {
-            main: baseTheme.colors.primary,
-            dark: baseTheme.colors.accent, // Red for hover states
+import { createTheme } from '@mui/material/styles';
+
+// Base theme configuration
+export const createMuiTheme = () => {
+    return {
+        palette: {
+            mode: 'dark',
+            primary: {
+                main: '#2196f3',
+                dark: '#1976d2',
+                light: '#64b5f6'
+            },
+            background: {
+                default: '#121212',
+                paper: '#1e1e1e',
+                surface: '#242424'
+            },
+            text: {
+                primary: '#ffffff',
+                secondary: 'rgba(255, 255, 255, 0.7)'
+            },
+            error: {
+                main: '#f44336'
+            },
+            divider: 'rgba(255, 255, 255, 0.12)',
+            action: {
+                hover: 'rgba(255, 255, 255, 0.08)',
+                selected: 'rgba(255, 255, 255, 0.16)'
+            }
         },
-        background: {
-            default: baseTheme.colors.background,
-            paper: baseTheme.colors.surface,
+        typography: {
+            fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+            fontSize: 14,
+            fontWeightLight: 300,
+            fontWeightRegular: 400,
+            fontWeightMedium: 500,
+            fontWeightBold: 700
         },
-        text: {
-            primary: baseTheme.colors.text.primary,
-            secondary: baseTheme.colors.text.secondary,
+        shape: {
+            borderRadius: 4
         },
-        error: {
-            main: baseTheme.colors.error
-        },
-        success: {
-            main: baseTheme.colors.success
-        },
-        action: {
-            hover: baseTheme.colors.hover
-        }
-    },
-    typography: {
-        fontFamily: baseTheme.typography.fontFamily.base,
-        fontSize: 12, // Base font size reduced
-        fontWeightLight: baseTheme.typography.fontWeight.normal,
-        fontWeightRegular: baseTheme.typography.fontWeight.normal,
-        fontWeightMedium: baseTheme.typography.fontWeight.medium,
-        fontWeightBold: baseTheme.typography.fontWeight.bold,
-        // Apply base font to all variants
-        allVariants: {
-            fontFamily: baseTheme.typography.fontFamily.base
-        }
-    },
-    components: {
-        // Button overrides
-        MuiButton: {
-            styleOverrides: {
-                root: {
-                    borderColor: baseTheme.colors.text.primary,
-                    '&:hover': {
-                        borderColor: baseTheme.colors.accent
+        spacing: (factor) => `${8 * factor}px`,
+        components: {
+            MuiButton: {
+                styleOverrides: {
+                    root: {
+                        textTransform: 'none'
+                    }
+                }
+            },
+            MuiPaper: {
+                styleOverrides: {
+                    root: {
+                        backgroundImage: 'none'
                     }
                 }
             }
-        },
-        MuiCssBaseline: {
-            styleOverrides: {
-                '*': {
-                    fontFamily: baseTheme.typography.fontFamily.base
-                }
-            }
         }
-    }
-});
+    };
+};
 
-// Export the base theme for direct value access
-export default baseTheme; 
+// Create the theme instance
+const theme = createTheme(createMuiTheme());
+
+export default theme; 

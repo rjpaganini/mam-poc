@@ -7,10 +7,13 @@
 """
 Utility functions for file operations, particularly for handling media file streaming.
 """
+import os
+import fcntl
+from typing import Generator
 
-def file_reader(file_path: str):
+def file_reader(file_path: str) -> Generator[bytes, None, None]:
     """
-    Generator function to read a file in chunks.
+    Generator function to read a file in chunks with proper locking.
     
     Args:
         file_path (str): Path to the file to read
@@ -18,17 +21,24 @@ def file_reader(file_path: str):
     Yields:
         bytes: Chunks of the file
     """
-    chunk_size = 8192  # 8KB chunks
-    with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
+    chunk_size = 1024 * 1024  # 1MB chunks for video streaming
+    try:
+        with open(file_path, 'rb') as f:
+            # Get an exclusive lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+            # Release the lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except IOError as e:
+        raise IOError(f"Error reading file {file_path}: {str(e)}")
 
-def partial_file_reader(file_path: str, start_byte: int, length: int):
+def partial_file_reader(file_path: str, start_byte: int, length: int) -> Generator[bytes, None, None]:
     """
-    Generator function to read a portion of a file in chunks.
+    Generator function to read a portion of a file in chunks with proper locking.
     Used for range requests when streaming media.
     
     Args:
@@ -39,15 +49,22 @@ def partial_file_reader(file_path: str, start_byte: int, length: int):
     Yields:
         bytes: Chunks of the file
     """
-    chunk_size = 8192  # 8KB chunks
+    chunk_size = 1024 * 1024  # 1MB chunks for video streaming
     remaining = length
     
-    with open(file_path, 'rb') as f:
-        f.seek(start_byte)
-        while remaining > 0:
-            chunk_size = min(chunk_size, remaining)
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            remaining -= len(chunk)
-            yield chunk 
+    try:
+        with open(file_path, 'rb') as f:
+            # Get an exclusive lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            f.seek(start_byte)
+            while remaining > 0:
+                current_chunk_size = min(chunk_size, remaining)
+                chunk = f.read(current_chunk_size)
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+            # Release the lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except IOError as e:
+        raise IOError(f"Error reading file {file_path}: {str(e)}") 

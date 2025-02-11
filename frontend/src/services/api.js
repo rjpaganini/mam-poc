@@ -1,198 +1,113 @@
-// frontend/src/services/api.js
-// Centralized API service with retry logic and error handling
+/**
+ * @file: api.js
+ * @description: Simple API service for Media Asset Management
+ */
 
 import axios from 'axios';
 import config from '../config';
+import logger from './logger';
 
-// Retry delay calculation with exponential backoff
-const getRetryDelay = (retryCount) => Math.min(1000 * (2 ** retryCount), 10000);
-
-// Try to connect to different ports
-const tryPorts = async (ports) => {
-    const errors = [];
-    
-    // Try only port 5001 with correct health endpoint
-    try {
-        const response = await fetch(`http://localhost:5001/api/v1/health/status`);
-        if (response.ok) {
-            console.log('Successfully connected to backend on port 5001');
-            return 5001;
-        }
-    } catch (error) {
-        console.warn('Failed to connect to backend:', error);
-        errors.push(`Port 5001: ${error.message}`);
+// Create a single axios instance
+const api = axios.create({
+    baseURL: config.api.baseURL,
+    timeout: 10000,
+    headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
     }
-    
-    throw new Error(`Could not connect to backend. Attempts:\n${errors.join('\n')}`);
-};
+});
 
-// Create axios instance with enhanced configuration
-const createAPI = async () => {
-    try {
-        // Try common development ports
-        const port = await tryPorts([5001, 5002]);  // Updated to try both ports
+// Add response interceptor for error handling
+api.interceptors.response.use(
+    response => response.data,
+    error => {
+        const { config: reqConfig, response } = error;
         
-        const api = axios.create({
-            baseURL: `http://localhost:${port}`,
-            timeout: config.api.timeout || 30000,
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            },
-            validateStatus: status => status >= 200 && status < 500
+        logger.error('API Error:', {
+            url: reqConfig?.url,
+            method: reqConfig?.method,
+            status: response?.status,
+            data: response?.data,
+            error: error.message
         });
-
-        // Request interceptor for logging
-        api.interceptors.request.use(config => {
-            console.debug(`API Request: ${config.method.toUpperCase()} ${config.url}`);
-            return config;
-        }, error => {
-            console.error('Request error:', error);
-            return Promise.reject(error);
-        });
-
-        // Response interceptor with retry logic
-        api.interceptors.response.use(
-            response => response.data,
-            async error => {
-                const { config, response } = error;
-                
-                // Log detailed error information
-                console.error('API Error:', {
-                    url: config?.url,
-                    method: config?.method,
-                    status: response?.status,
-                    data: response?.data,
-                    error: error.message
-                });
-                
-                // Skip retry for specific status codes
-                if (response && [400, 401, 403, 404].includes(response.status)) {
-                    return Promise.reject(error);
-                }
-                
-                // Initialize retry count
-                config.retryCount = config.retryCount || 0;
-                
-                // Check if we should retry
-                if (config.retryCount >= 3) {
-                    return Promise.reject(error);
-                }
-                
-                config.retryCount += 1;
-                
-                // Calculate delay
-                const delay = getRetryDelay(config.retryCount);
-                console.warn(`Retrying request (${config.retryCount}/3) after ${delay}ms`);
-                
-                // Wait before retrying
-                await new Promise(resolve => setTimeout(resolve, delay));
-                
-                // Retry request
-                return api(config);
-            }
-        );
-
-        return api;
-    } catch (error) {
-        console.error('API creation failed:', error);
-        throw error;
+        
+        return Promise.reject(error);
     }
-};
+);
 
-// Initialize API instance
-let apiInstance = null;
-
-const getAPI = async () => {
-    if (!apiInstance) {
-        apiInstance = await createAPI();
+// Add request interceptor to ensure URL construction
+api.interceptors.request.use(
+    config => {
+        // Remove any double slashes in the URL (except after http/https)
+        config.url = config.url.replace(/([^:]\/)\/+/g, '$1');
+        return config;
+    },
+    error => {
+        return Promise.reject(error);
     }
-    return apiInstance;
-};
+);
 
-// API endpoints with enhanced error handling
+// Simple API endpoints
 export const assetsApi = {
-    search: async (query) => {
-        const api = await getAPI();
+    // Get all assets with pagination
+    getAssets: async (page = 1, limit = 20) => {
         try {
-            return await api.get(`/assets?query=${encodeURIComponent(query)}`);
+            const response = await api.get(config.api.endpoints.assets, {
+                params: { page, limit }
+            });
+            return response;
         } catch (error) {
-            console.error('Search failed:', error);
-            throw new Error('Failed to search assets');
+            logger.error('Failed to fetch assets:', error);
+            throw error;
         }
     },
     
-    getStatus: async () => {
-        const api = await getAPI();
+    // Get single asset
+    getAsset: async (id) => {
         try {
-            return await api.get('/health/status');
+            const response = await api.get(`${config.api.endpoints.assets}/${id}`);
+            return response;
         } catch (error) {
-            console.error('Health check failed:', error);
+            logger.error(`Failed to fetch asset ${id}:`, error);
             throw error;
         }
     },
-
-    loadAssets: async () => {
-        const api = await getAPI();
+    
+    // Get health status
+    getHealth: async () => {
         try {
-            return await api.get('/assets');
+            const response = await api.get(config.api.endpoints.health);
+            return response;
         } catch (error) {
-            console.error('Error fetching assets:', error);
+            logger.error('Health check failed:', error);
             throw error;
         }
     }
 };
 
-export const regenerateThumbnails = async (timestamp = 6) => {
+// Simple thumbnail management
+export const regenerateThumbnails = async () => {
     try {
-        // Clear thumbnail cache first
         const { ipcRenderer } = window.require('electron');
         await ipcRenderer.invoke('clear-thumbnail-cache');
-        
-        // Then regenerate thumbnails with specified timestamp
-        const api = await getAPI();
-        const response = await api.post('/regenerate-thumbnails', {
-            timestamp: timestamp
-        });
-        
-        // Force reload assets to get fresh thumbnails
-        const assetsResponse = await assetsApi.loadAssets();
-        
-        // Verify thumbnails were generated with correct timestamp
-        const assets = assetsResponse.data;
-        const incorrectTimestamps = assets.filter(
-            asset => asset.thumbnail_timestamp !== timestamp
-        );
-        
-        if (incorrectTimestamps.length > 0) {
-            console.warn('Some assets have incorrect thumbnail timestamps:', incorrectTimestamps);
-        }
-        
-        return {
-            ...response.data,
-            assetsVerified: incorrectTimestamps.length === 0
-        };
+        return await assetsApi.getAssets();
     } catch (error) {
-        console.error('Failed to regenerate thumbnails:', error);
+        logger.error('Failed to regenerate thumbnails:', error);
         throw error;
     }
 };
 
-// Add a new function to force reload an individual asset's thumbnail
 export const reloadThumbnail = async (thumbnailUrl) => {
-    if (!thumbnailUrl) return;
-    
-    // Add both timestamp and generation time to URL
+    if (!thumbnailUrl) return thumbnailUrl;
     const timestamp = Date.now();
     const separator = thumbnailUrl.includes('?') ? '&' : '?';
-    return `${thumbnailUrl}${separator}t=${timestamp}&gen=${timestamp}`;
+    return `${thumbnailUrl}${separator}t=${timestamp}`;
 };
 
 // Add a function to get current thumbnail settings
 export const getThumbnailSettings = async () => {
     try {
-        const api = await getAPI();
-        const response = await api.get('/assets');
+        const response = await assetsApi.getAssets();
         const assets = response.data;
         
         // Get the most common timestamp being used
@@ -216,4 +131,6 @@ export const getThumbnailSettings = async () => {
     }
 };
 
-export default getAPI; 
+// Export the configured API instance
+const apiService = api;
+export default apiService; 

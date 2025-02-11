@@ -1,239 +1,74 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
-import { Box, CircularProgress, ThemeProvider, createTheme, CssBaseline } from '@mui/material';
-import MediaLibrary from './components/MediaLibrary';  // Import the main MediaLibrary component
-import { AssetCard } from './components/MediaLibrary/AssetCard';
-import ListView from './components/MediaLibrary/ListView';
+/**
+ * @file: App.js
+ * @description: Main application component for the Media Asset Management (MAM) system
+ * 
+ * Core Responsibilities:
+ * - Application routing and navigation
+ * - Theme management and configuration
+ * - WebSocket connection handling for real-time updates
+ * - Global state management
+ * - System health monitoring
+ * - Asset processing status tracking
+ * 
+ * Key Features:
+ * - Real-time asset updates via WebSocket
+ * - Dynamic theme switching
+ * - Responsive layout management
+ * - Error boundary implementation
+ * - Performance optimization with React hooks
+ * 
+ * Component Structure:
+ * - App (main)
+ *   ├── MediaLibrary
+ *   │   ├── ListView
+ *   │   ├── GridView
+ *   │   └── ViewToggle
+ *   ├── SystemHealth
+ *   ├── DirectoryManager
+ *   ├── AssetDetails
+ *   └── ProcessingStatus
+ * 
+ * @author: AI Assistant
+ * @lastModified: February 2024
+ */
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { Box, Typography } from '@mui/material';
+import { ThemeProvider } from '@mui/material/styles';
+import { BrowserRouter as Router } from 'react-router-dom';
+import theme from './theme';
+import MediaLibrary from './components/MediaLibrary';
+import ProcessingStatus from './components/ProcessingStatus';
+import { useWebSocketService } from './hooks/useWebSocketService';
+import logger from './services/logger';
+import { Routes, Route } from 'react-router-dom';
+import { Box as MuiBox, CircularProgress, CssBaseline } from '@mui/material';
 import { ViewToggle } from './components/MediaLibrary/ViewToggle';
 import config from './config';
 import { assetsApi } from './services/api';
 import SystemHealth from './components/SystemHealth';
 import DirectoryManager from './components/DirectoryManager';
 import AssetDetails from './components/AssetDetails';
-import logger from './services/logger';
-import { monitorThemeChanges } from './utils/themeDebug';
-import { createMuiTheme } from './theme';
-
-// Create MUI theme once
-const theme = createTheme(createMuiTheme());
-
-// Safely get nested theme values with fallbacks
-const getThemeValue = (path, fallback) => {
-    try {
-        return path.split('.').reduce((obj, key) => obj[key], config.theme) ?? fallback;
-    } catch (e) {
-        logger.warn(`Theme value not found: ${path}, using fallback`, { fallback });
-        return fallback;
-    }
-};
-
-// Log theme application with error handling
-const logThemeChange = (theme) => {
-    try {
-        logger.info('Theme configuration applied:', {
-            colors: theme.palette,
-            typography: theme.typography,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        logger.error('Failed to log theme configuration:', error);
-    }
-};
-
-// Monitor theme in development
-if (process.env.NODE_ENV === 'development') {
-    monitorThemeChanges(theme);
-}
-
-// WebSocket message types
-const WS_MESSAGE_TYPES = {
-    SCAN_PROGRESS: 'scan_progress',
-    SCAN_COMPLETE: 'scan_complete',
-    SCAN_ERROR: 'scan_error',
-    ERROR: 'error',
-    CONNECTION_STATUS: 'connection_status',
-    PING: 'ping',
-    PONG: 'pong'
-};
-
-// Define the function to handle WebSocket messages
-const handleWebSocketMessage = (data, callbacks) => {
-    const { onScanProgress, onScanComplete, onError } = callbacks;
-    
-    try {
-        // Validate message format
-        if (!data || typeof data !== 'object' || !data.type) {
-            throw new Error('Invalid message format');
-        }
-        
-        switch (data.type) {
-            case WS_MESSAGE_TYPES.SCAN_PROGRESS:
-                onScanProgress?.(data.message);
-                break;
-            case WS_MESSAGE_TYPES.SCAN_COMPLETE:
-                onScanComplete?.(data.data);
-                break;
-            case WS_MESSAGE_TYPES.SCAN_ERROR:
-            case WS_MESSAGE_TYPES.ERROR:
-                onError?.(data.message);
-                break;
-            case WS_MESSAGE_TYPES.CONNECTION_STATUS:
-                logger.info('[WebSocket] Status:', data.message);
-                break;
-            case WS_MESSAGE_TYPES.PONG:
-                logger.debug('[WebSocket] Received pong');
-                break;
-            default:
-                logger.warn('[WebSocket] Unknown message type:', data.type);
-        }
-    } catch (error) {
-        logger.error('[WebSocket] Message handling error:', error);
-        onError?.('Failed to process WebSocket message');
-    }
-};
-
-// WebSocket connection management
-const useWebSocket = (callbacks) => {
-    const [wsConnected, setWsConnected] = useState(false);
-    const ws = useRef(null);
-    const reconnectAttempts = useRef(0);
-    const maxReconnectAttempts = 5;
-    const reconnectTimeout = useRef(null);
-    const pingInterval = useRef(null);
-
-    const cleanupConnection = useCallback(() => {
-        if (pingInterval.current) {
-            clearInterval(pingInterval.current);
-            pingInterval.current = null;
-        }
-        if (reconnectTimeout.current) {
-            clearTimeout(reconnectTimeout.current);
-            reconnectTimeout.current = null;
-        }
-        if (ws.current) {
-            try {
-                ws.current.close();
-            } catch (err) {
-                logger.error('[WebSocket] Error closing connection:', err);
-            }
-            ws.current = null;
-        }
-    }, []);
-
-    const connect = useCallback(() => {
-        try {
-            cleanupConnection();
-
-            const wsUrl = `ws://${config.api.host}:${config.api.port}/ws`;
-            logger.info('[WebSocket] Attempting connection to:', wsUrl);
-
-            const socket = new WebSocket(wsUrl);
-            ws.current = socket;
-
-            // Set a connection timeout
-            const connectionTimeout = setTimeout(() => {
-                if (socket.readyState !== WebSocket.OPEN) {
-                    logger.error('[WebSocket] Connection timeout');
-                    socket.close();
-                }
-            }, 5000);
-
-            socket.onopen = () => {
-                clearTimeout(connectionTimeout);
-                logger.info('[WebSocket] Connection established');
-                setWsConnected(true);
-                reconnectAttempts.current = 0;
-
-                // Start ping interval
-                pingInterval.current = setInterval(() => {
-                    if (socket.readyState === WebSocket.OPEN) {
-                        try {
-                            socket.send(JSON.stringify({ type: WS_MESSAGE_TYPES.PING }));
-                        } catch (err) {
-                            logger.error('[WebSocket] Failed to send ping:', err);
-                            socket.close();
-                        }
-                    }
-                }, 30000); // Ping every 30 seconds
-            };
-
-            socket.onclose = (event) => {
-                clearTimeout(connectionTimeout);
-                logger.info(`[WebSocket] Connection closed: ${event.code} - ${event.reason}`);
-                setWsConnected(false);
-                cleanupConnection();
-
-                if (reconnectAttempts.current < maxReconnectAttempts) {
-                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 10000);
-                    logger.info(`[WebSocket] Attempting to reconnect in ${delay}ms...`);
-                    reconnectTimeout.current = setTimeout(() => {
-                        reconnectAttempts.current++;
-                        connect();
-                    }, delay);
-                } else {
-                    logger.error('[WebSocket] Max reconnection attempts reached');
-                }
-            };
-
-            socket.onerror = (error) => {
-                logger.error('[WebSocket] Error:', error);
-            };
-
-            socket.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    handleWebSocketMessage(data, callbacks);
-                } catch (error) {
-                    logger.error('[WebSocket] Failed to parse message:', error);
-                    callbacks.onError?.('Failed to process WebSocket message');
-                }
-            };
-        } catch (error) {
-            logger.error('[WebSocket] Failed to establish connection:', error);
-            if (reconnectAttempts.current < maxReconnectAttempts) {
-                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 10000);
-                reconnectTimeout.current = setTimeout(() => {
-                    reconnectAttempts.current++;
-                    connect();
-                }, delay);
-            }
-        }
-    }, [callbacks, cleanupConnection]);
-
-    // Initialize connection on mount and cleanup on unmount
-    useEffect(() => {
-        connect();
-        return cleanupConnection;
-    }, [connect, cleanupConnection]);
-
-    return {
-        isConnected: wsConnected,
-        reconnect: () => {
-            reconnectAttempts.current = 0;
-            connect();
-        }
-    };
-};
 
 // Updated styles using MUI theme spacing
-const styles = {
+const styles = theme => ({
     app: {
         minHeight: '100vh',
-        backgroundColor: getThemeValue('colors.background', '#000000'),
-        color: getThemeValue('colors.text.primary', '#FFFFFF')
+        backgroundColor: theme.palette.background.default,
+        color: theme.palette.text.primary
     },
     container: {
         maxWidth: '1400px',
         margin: '0 auto'
     },
     title: {
-        color: getThemeValue('colors.text.primary', '#FFFFFF'),
+        color: theme.palette.text.primary,
         textAlign: 'center'
     },
     searchSection: {
-        backgroundColor: getThemeValue('colors.surface', '#111111'),
-        borderRadius: getThemeValue('radius.lg', '6px'),
-        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
+        backgroundColor: theme.palette.background.paper,
+        borderRadius: theme.shape.borderRadius,
+        border: `1px solid ${theme.palette.divider}`,
         maxWidth: '1400px',
         margin: '0 auto'
     },
@@ -244,17 +79,17 @@ const styles = {
     },
     input: {
         flex: 1,
-        backgroundColor: getThemeValue('colors.background', '#000000'),
-        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
-        borderRadius: getThemeValue('radius.md', '4px'),
-        color: getThemeValue('colors.text.primary', '#FFFFFF'),
+        backgroundColor: theme.palette.background.default,
+        border: `1px solid ${theme.palette.divider}`,
+        borderRadius: theme.shape.borderRadius,
+        color: theme.palette.text.primary,
         fontSize: '16px'
     },
     button: {
-        backgroundColor: getThemeValue('colors.primary', '#FFFFFF'),
+        backgroundColor: theme.palette.primary.main,
         color: '#fff',
         border: 'none',
-        borderRadius: getThemeValue('radius.md', '4px'),
+        borderRadius: theme.shape.borderRadius,
         cursor: 'pointer',
         fontSize: '16px',
         '&:hover': {
@@ -272,16 +107,16 @@ const styles = {
         alignItems: 'center'
     },
     select: {
-        backgroundColor: getThemeValue('colors.background', '#000000'),
-        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
-        borderRadius: getThemeValue('radius.md', '4px'),
-        color: getThemeValue('colors.text.primary', '#FFFFFF'),
+        backgroundColor: theme.palette.background.default,
+        border: `1px solid ${theme.palette.divider}`,
+        borderRadius: theme.shape.borderRadius,
+        color: theme.palette.text.primary,
         fontSize: '16px'
     },
     assetCard: {
-        backgroundColor: getThemeValue('colors.surface', '#111111'),
-        borderRadius: getThemeValue('radius.md', '4px'),
-        border: `1px solid ${getThemeValue('colors.border', '#222222')}`,
+        backgroundColor: theme.palette.background.paper,
+        borderRadius: theme.shape.borderRadius,
+        border: `1px solid ${theme.palette.divider}`,
         overflow: 'hidden',
         cursor: 'pointer',
         transition: 'transform 0.2s, box-shadow 0.2s',
@@ -293,10 +128,10 @@ const styles = {
     thumbnail: {
         position: 'relative',
         paddingTop: '56.25%',
-        backgroundColor: getThemeValue('colors.background', '#000000'),
+        backgroundColor: theme.palette.background.default,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
-        borderBottom: `1px solid ${getThemeValue('colors.border', '#222222')}`
+        borderBottom: `1px solid ${theme.palette.divider}`
     },
     cardContent: {
         padding: 3 // MUI spacing unit
@@ -305,7 +140,7 @@ const styles = {
         display: 'grid',
         gridTemplateColumns: 'repeat(2, 1fr)',
         gap: 1, // MUI spacing unit
-        color: getThemeValue('colors.text.secondary', '#999999'),
+        color: theme.palette.text.secondary,
         fontSize: '14px'
     },
     assetDetails: {
@@ -321,9 +156,22 @@ const styles = {
         marginBottom: 4 // MUI spacing unit
     },
     logo: {
-        fontSize: getThemeValue('typography.fontSize.xl', '1.25rem'),
-        color: getThemeValue('colors.text.primary', '#FFFFFF'),
+        fontSize: theme.typography.fontSize.xl,
+        color: theme.palette.text.primary,
         margin: 0
+    }
+});
+
+// WebSocket callbacks for app-level events
+const wsCallbacks = {
+    onMessage: (message) => {
+        logger.debug('App received WebSocket message:', message);
+    },
+    onError: (error) => {
+        logger.error('App WebSocket error:', error);
+    },
+    onConnectionChange: (connected) => {
+        logger.info('App WebSocket connection state:', connected);
     }
 };
 
@@ -331,7 +179,7 @@ const styles = {
  * Main App component
  * Provides theme context and routing
  */
-function App() {
+const App = () => {
     const [assets, setAssets] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -342,21 +190,23 @@ function App() {
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedTags, setSelectedTags] = useState([]);
 
-    // Move loadAssets definition before its usage
+    const { isConnected } = useWebSocketService(wsCallbacks);
+
+    // Memoize loadAssets to prevent unnecessary re-renders
     const loadAssets = useCallback(async (retryCount = 0) => {
         try {
             setLoading(true);
             setError(null); // Clear previous errors
             
-            const data = await assetsApi.loadAssets();
+            const response = await assetsApi.getAssets();
             
             // Validate response data
-            if (!Array.isArray(data)) {
+            if (!Array.isArray(response)) {
                 throw new Error('Invalid response format: expected array');
             }
             
             // Validate and transform assets
-            const validatedAssets = data.filter(asset => {
+            const validatedAssets = response.filter(asset => {
                 if (!asset?.id || !asset?.title) {
                     console.warn('Skipping invalid asset:', asset);
                     return false;
@@ -370,16 +220,16 @@ function App() {
                 description: asset.description || '',
                 file_path: asset.file_path || '',
                 file_size: Number(asset.file_size) || 0,
-                media_metadata: {
-                    ...asset.media_metadata,
-                    duration: Number(asset.media_metadata?.duration) || 0,
-                    fps: Number(asset.media_metadata?.fps) || 0,
-                    bitrate: Number(asset.media_metadata?.bitrate) || 0,
-                    width: Number(asset.media_metadata?.width) || 0,
-                    height: Number(asset.media_metadata?.height) || 0,
-                    codec: asset.media_metadata?.codec || '',
-                    format: asset.media_metadata?.format || ''
-                }
+                duration: Number(asset.duration) || 0,
+                fps: Number(asset.fps) || 0,
+                width: Number(asset.width) || 0,
+                height: Number(asset.height) || 0,
+                codec: asset.codec || '',
+                container_format: asset.container_format || '',
+                bit_rate: Number(asset.bit_rate) || 0,
+                audio_codec: asset.audio_codec || '',
+                audio_channels: Number(asset.audio_channels) || 0,
+                audio_sample_rate: Number(asset.audio_sample_rate) || 0
             }));
             
             setAssets(validatedAssets);
@@ -398,38 +248,11 @@ function App() {
                 return;
             }
             
-            setError(`Failed to load assets: ${err.message}`);
-            setAssets([]); // Reset to empty array on final failure
+            setError('Failed to load assets. Please try again.');
         } finally {
             setLoading(false);
         }
     }, []);
-
-    // Define callbacks before using them
-    const wsCallbacks = useMemo(() => ({
-        onScanProgress: (message) => {
-            console.log('Scan progress:', message);
-            // Update UI with scan progress
-        },
-        onScanComplete: (data) => {
-            console.log('Scan complete:', data);
-            loadAssets(); // Reload assets after scan
-        },
-        onError: (message) => {
-            console.error('WebSocket error:', message);
-            setError(message);
-        }
-    }), [loadAssets]);
-
-    // Pass callbacks to useWebSocket
-    const { isConnected: wsConnected, reconnect } = useWebSocket(wsCallbacks);
-
-    // Use wsConnected in the UI to show connection status
-    useEffect(() => {
-        if (!wsConnected) {
-            console.warn('WebSocket disconnected - some real-time features may be unavailable');
-        }
-    }, [wsConnected]);
 
     // Load assets on mount
     useEffect(() => {
@@ -437,29 +260,21 @@ function App() {
     }, [loadAssets]);
 
     // Callback for when scan is complete
-    const handleScanComplete = useCallback(() => {
+    const handleScanComplete = () => {
         loadAssets();
         setShowDirectoryManager(false);
-    }, [loadAssets]);
-
-    // Add effect to monitor theme changes
-    useEffect(() => {
-        if (process.env.NODE_ENV === 'development') {
-            monitorThemeChanges(theme);
-            
-            // Log when component mounts
-            logger.info('App component mounted with theme:', {
-                timestamp: new Date().toISOString()
-            });
-        }
-    }, []);  // Empty dependency array - only run on mount
+    };
 
     return (
         <ThemeProvider theme={theme}>
             <CssBaseline />
-            <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', color: 'text.primary' }}>
+            <MuiBox sx={{ 
+                minHeight: '100vh',
+                bgcolor: 'background.default',
+                color: 'text.primary'
+            }}>
                 {/* Draggable title bar */}
-                <Box sx={{ 
+                <MuiBox sx={{ 
                     position: 'fixed',
                     top: 0,
                     left: 0,
@@ -472,7 +287,7 @@ function App() {
                 }} />
                 
                 {/* Main Header */}
-                <Box sx={{
+                <MuiBox sx={{
                     position: 'sticky',
                     top: 0,
                     display: 'flex',
@@ -487,7 +302,7 @@ function App() {
                     zIndex: 1000
                 }}>
                     {/* Logo */}
-                    <Box sx={{ 
+                    <MuiBox sx={{ 
                         position: 'absolute',
                         left: '25%',
                         transform: 'translateX(-50%)',
@@ -496,7 +311,7 @@ function App() {
                         WebkitAppRegion: 'no-drag',
                         zIndex: 1
                     }}>
-                        <Box component="h1" sx={{
+                        <MuiBox component="h1" sx={{
                             color: 'text.primary',
                             fontSize: '0.9rem !important',
                             fontWeight: 'medium',
@@ -507,22 +322,46 @@ function App() {
                             textTransform: 'none'
                         }}>
                             valn.io
-                        </Box>
-                    </Box>
+                        </MuiBox>
+                    </MuiBox>
 
                     {/* Layout spacer */}
-                    <Box sx={{ width: '100px' }} />
+                    <MuiBox sx={{ width: '100px' }} />
 
                     {/* Controls */}
-                    <Box sx={{ 
+                    <MuiBox sx={{ 
                         display: 'flex', 
                         alignItems: 'center', 
                         gap: 2,
                         WebkitAppRegion: 'no-drag',
                         zIndex: 2
                     }}>
-                        {/* Scan Media Button - Minimalist black with white border */}
-                        <Box
+                        {/* AI Processing Stats - Compact Display */}
+                        <MuiBox sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            px: 2,
+                            py: 0.5,
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            fontSize: '0.7rem'
+                        }}>
+                            <MuiBox sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <MuiBox component="span" color="text.secondary">AI:</MuiBox>
+                                <MuiBox component="span" color="success.main">
+                                    {assets.filter(a => a?.media_metadata?.ai_metadata?.processed_at).length}
+                                </MuiBox>
+                                <MuiBox component="span" color="text.secondary">/</MuiBox>
+                                <MuiBox component="span">
+                                    {assets.length}
+                                </MuiBox>
+                            </MuiBox>
+                        </MuiBox>
+
+                        {/* Scan Media Button */}
+                        <MuiBox
                             component="button"
                             onClick={() => setShowDirectoryManager(true)}
                             sx={{
@@ -549,36 +388,51 @@ function App() {
                             }}
                         >
                             SCAN MEDIA
-                        </Box>
+                        </MuiBox>
 
-                        <SystemHealth wsConnected={wsConnected} />
-                    </Box>
-                </Box>
+                        <SystemHealth 
+                            wsConnected={isConnected} 
+                        />
+                    </MuiBox>
+                </MuiBox>
 
                 {/* Main content */}
-                <Box sx={{ flex: 1, p: 2 }}>
+                <MuiBox sx={{ flex: 1, p: 2 }}>
                     <Routes>
                         <Route path="/" element={
-                            <MediaLibrary 
-                                assets={assets}
-                                loading={loading}
-                                error={error}
-                                searchQuery={searchQuery}
-                                setSearchQuery={setSearchQuery}
-                                sortBy={sortBy}
-                                setSortBy={setSortBy}
-                                sortDirection={sortDirection}
-                                setSortDirection={setSortDirection}
-                                viewMode={viewMode}
-                                setViewMode={setViewMode}
-                                setShowDirectoryManager={setShowDirectoryManager}
-                                selectedTags={selectedTags}
-                                setSelectedTags={setSelectedTags}
-                            />
+                            loading ? (
+                                <MuiBox sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+                                    <CircularProgress />
+                                </MuiBox>
+                            ) : error ? (
+                                <Typography color="error" sx={{ textAlign: 'center', mt: 4 }}>
+                                    {error}
+                                </Typography>
+                            ) : (
+                                <MediaLibrary 
+                                    assets={assets}
+                                    loading={loading}
+                                    error={error}
+                                    searchQuery={searchQuery}
+                                    setSearchQuery={setSearchQuery}
+                                    sortBy={sortBy}
+                                    setSortBy={setSortBy}
+                                    sortDirection={sortDirection}
+                                    setSortDirection={setSortDirection}
+                                    viewMode={viewMode}
+                                    setViewMode={setViewMode}
+                                    setShowDirectoryManager={setShowDirectoryManager}
+                                    selectedTags={selectedTags}
+                                    setSelectedTags={setSelectedTags}
+                                />
+                            )
                         } />
                         <Route path="/asset/:id" element={<AssetDetails />} />
                     </Routes>
-                </Box>
+                </MuiBox>
+
+                {/* Processing Status for real-time updates */}
+                <ProcessingStatus />
 
                 {showDirectoryManager && (
                     <DirectoryManagerModal 
@@ -586,14 +440,31 @@ function App() {
                         onScanComplete={handleScanComplete}
                     />
                 )}
-            </Box>
+
+                {/* Status indicator */}
+                {!isConnected && (
+                    <Typography 
+                        color="error" 
+                        sx={{ 
+                            position: 'fixed', 
+                            top: 16, 
+                            right: 16,
+                            bgcolor: 'background.paper',
+                            p: 1,
+                            borderRadius: 1
+                        }}
+                    >
+                        Disconnected
+                    </Typography>
+                )}
+            </MuiBox>
         </ThemeProvider>
     );
-}
+};
 
 // Separate modal component for better organization
 const DirectoryManagerModal = ({ onClose, onScanComplete }) => (
-    <Box sx={{
+    <MuiBox sx={{
         position: 'fixed',
         top: 0,
         left: 0,
@@ -605,22 +476,22 @@ const DirectoryManagerModal = ({ onClose, onScanComplete }) => (
         justifyContent: 'center',
         zIndex: 1000
     }}>
-        <Box sx={{
-            backgroundColor: config.theme.colors.surface,
-            borderRadius: config.theme.radius.lg,
+        <MuiBox sx={{
+            backgroundColor: theme.palette.background.paper,
+            borderRadius: theme.shape.borderRadius,
             padding: 3,
             maxWidth: '600px',
             width: '90%',
             maxHeight: '90vh',
             overflow: 'auto'
         }}>
-            <Box sx={{
+            <MuiBox sx={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 mb: 2
             }}>
-                <h2 style={{ margin: 0, color: config.theme.colors.text.primary }}>
+                <h2 style={{ margin: 0, color: theme.palette.text.primary }}>
                     Media Directories
                 </h2>
                 <button
@@ -628,17 +499,17 @@ const DirectoryManagerModal = ({ onClose, onScanComplete }) => (
                     style={{
                         backgroundColor: 'transparent',
                         border: 'none',
-                        color: config.theme.colors.text.secondary,
+                        color: theme.palette.text.secondary,
                         cursor: 'pointer',
-                        padding: config.theme.spacing.sm
+                        padding: theme.spacing.sm
                     }}
                 >
                     ✕
                 </button>
-            </Box>
+            </MuiBox>
             <DirectoryManager onScanComplete={onScanComplete} />
-        </Box>
-    </Box>
+        </MuiBox>
+    </MuiBox>
 );
 
 export default App;

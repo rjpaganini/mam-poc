@@ -1,15 +1,19 @@
 # Core dependencies - Production
-Flask==3.0.2  # Web framework
+Flask==3.0.0  # Web framework
 Flask-SQLAlchemy==3.1.1  # ORM integration
 SQLAlchemy==2.0.27  # Database ORM
 Werkzeug==3.0.1  # WSGI utilities
-Flask-Sock==0.7.0  # WebSocket support
 Flask-Migrate==4.0.5  # Database migrations
 APScheduler==3.10.4  # Background task scheduling
 gunicorn==21.2.0  # Production WSGI server
-gevent==23.9.1  # Async worker
+
+# AWS Integration
+boto3==1.36.13  # AWS SDK
+botocore==1.36.13  # AWS SDK Core
+python-dotenv==1.0.1  # Environment management
 
 # Media Processing
+torch>=2.2.0  # Updated for Python 3.12 compatibility
 ffmpeg-python==0.2.0  # Video processing
 Pillow==10.2.0  # Image processing
 moviepy==1.0.3  # Video editing
@@ -17,7 +21,7 @@ python-magic==0.4.27  # File type detection
 scenedetect==0.6.2  # Video scene detection
 
 # API and Data Handling
-flask-cors==4.0.0  # Cross-origin support
+Flask-CORS==4.0.0  # Cross-origin support
 marshmallow==3.20.2  # Object serialization
 marshmallow-sqlalchemy==1.0.0  # ORM/Marshmallow integration
 pydantic==2.6.0  # Data validation
@@ -27,13 +31,13 @@ python-dateutil==2.8.2  # Date utilities
 
 # WebSocket and Real-time
 Flask-SocketIO==5.3.6  # Socket.IO integration
-python-socketio==5.11.0  # Socket.IO implementation
-python-engineio==4.8.2  # Engine.IO implementation
+python-socketio==5.10.0  # Socket.IO implementation
+python-engineio==4.8.0  # Engine.IO implementation
+eventlet==0.35.2  # Async server
 
 # System and Monitoring
 psutil==5.9.8  # System utilities
 watchdog==3.0.0  # File system monitoring
-python-dotenv==1.0.1  # Environment configuration
 structlog==24.1.0  # Structured logging
 sentry-sdk==1.40.0  # Error tracking
 
@@ -46,7 +50,6 @@ redis==5.0.1  # Cache backend
 Flask-Caching==2.1.0  # Flask cache integration
 
 # AI/ML Features (Optional)
-torch==2.1.2  # Machine learning
 transformers==4.36.2  # NLP tools
 
 # Development and Testing
@@ -57,6 +60,12 @@ flake8==7.0.0  # Code linting
 mypy==1.8.0  # Type checking
 ipython==8.17.2  # Interactive shell
 
+# AI Processing Dependencies
+opencv-python-headless==4.8.1.78  # Optimized OpenCV without GUI
+numpy<2.0.0  # Pinned to 1.x for OpenCV compatibility
+scenedetect==0.6.2  # Scene detection
+typing-extensions>=4.5.0  # Enhanced type hints
+
 # Note: All versions have been tested together and verified working
 # Required system packages: ffmpeg
-# Python version: 3.11.x 
+# Python version: 3.12.x 

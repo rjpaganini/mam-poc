@@ -23,7 +23,7 @@ const SystemHealth = ({ wsConnected }) => {
     useEffect(() => {
         const checkDatabase = async () => {
             try {
-                const response = await fetch(`${config.api.baseURL}/api/v1/health/status`);
+                const response = await fetch(`${config.api.baseURL}${config.api.endpoints.health}`);
                 if (!response.ok) throw new Error('Database health check failed');
                 const data = await response.json();
                 setDbStatus(data.status === 'healthy' ? 'healthy' : 'error');

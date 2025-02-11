@@ -1,31 +1,56 @@
 // macOS Native Entry Point
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const isDev = process.env.ELECTRON_START_URL != null || process.env.NODE_ENV === 'development';
 
-// Configure logging
+// Enhanced logging setup with rotation
 const LOG_PATH = path.join(app.getPath('userData'), 'logs');
-const MAIN_LOG = path.join(LOG_PATH, 'electron-main.log');
+const MAIN_LOG = path.join(LOG_PATH, 'main.log');
+const RENDERER_LOG = path.join(LOG_PATH, 'renderer.log');
+const ERROR_LOG = path.join(LOG_PATH, 'error.log');
 
 // Ensure log directory exists
 if (!fs.existsSync(LOG_PATH)) {
     fs.mkdirSync(LOG_PATH, { recursive: true });
 }
 
-// Custom logger
-const logger = {
-    log: (...args) => {
-        const message = `[${new Date().toISOString()}] INFO: ${args.join(' ')}\n`;
-        console.log(message.trim());
-        fs.appendFileSync(MAIN_LOG, message);
-    },
-    error: (...args) => {
-        const message = `[${new Date().toISOString()}] ERROR: ${args.join(' ')}\n`;
-        console.error(message.trim());
-        fs.appendFileSync(MAIN_LOG, message);
+// Rotate logs if they exceed 10MB
+const rotateLog = (logPath) => {
+    try {
+        if (fs.existsSync(logPath) && fs.statSync(logPath).size > 10 * 1024 * 1024) {
+            fs.renameSync(logPath, `${logPath}.old`);
+        }
+    } catch (err) {
+        console.error(`Failed to rotate log ${logPath}:`, err);
     }
 };
+
+// Enhanced logger with rotation
+const logger = {
+    log: (...args) => {
+        rotateLog(MAIN_LOG);
+        const message = `[${new Date().toISOString()}] INFO: ${args.join(' ')}\n`;
+        fs.appendFileSync(MAIN_LOG, message);
+        console.log(message.trim());
+    },
+    error: (...args) => {
+        rotateLog(ERROR_LOG);
+        const message = `[${new Date().toISOString()}] ERROR: ${args.join(' ')}\n`;
+        fs.appendFileSync(ERROR_LOG, message);
+        console.error(message.trim());
+    }
+};
+
+// Capture uncaught exceptions
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception:', error);
+});
+
+// Capture unhandled rejections
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
 
 // Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
@@ -92,20 +117,24 @@ if (!gotTheLock) {
         
         // Create the browser window with native macOS chrome
         mainWindow = new BrowserWindow({
-            ...windowState.bounds,
-            title: 'Media Asset Manager',
+            width: 1200,
+            height: 800,
             webPreferences: {
                 nodeIntegration: true,
                 contextIsolation: false,
-                enableRemoteModule: true,
-                webSecurity: !isDev,
-                spellcheck: false,
-                // Create a separate session for thumbnails
-                partition: 'persist:thumbnails'
+                webSecurity: false,
+                // Enable native file system access
+                webviewTag: true,
+                allowRunningInsecureContent: true,
+                // Add memory limits
+                additionalArguments: [
+                    '--max-old-space-size=4096',
+                    '--max-heap-size=2048'
+                ]
             },
             // Enhanced macOS specific styling with proper window controls
             titleBarStyle: 'hiddenInset',
-            trafficLightPosition: { x: 20, y: 20 }, // Position window controls
+            trafficLightPosition: { x: 20, y: 20 },
             vibrancy: 'under-window',
             visualEffectState: 'active',
             transparent: true,
@@ -185,16 +214,21 @@ if (!gotTheLock) {
                 responseHeaders: {
                     ...details.responseHeaders,
                     'Content-Security-Policy': [
-                        isDev 
-                            ? "default-src 'self' http://localhost:* ws://localhost:*;"
-                            : "default-src 'self';",
+                        "default-src 'self' http://localhost:* http://127.0.0.1:*;",
+                        "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;",
                         "script-src 'self' 'unsafe-inline' 'unsafe-eval';",
                         "style-src 'self' 'unsafe-inline';",
-                        "img-src 'self' data: blob: http://localhost:*;",
-                        "media-src 'self' http://localhost:* blob:;"
+                        "img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*;",
+                        "media-src 'self' http://localhost:* http://127.0.0.1:* blob:;"
                     ].join(' ')
                 }
             });
+        });
+
+        // Register file protocol for media (in both dev and prod)
+        protocol.registerFileProtocol('file', (request, callback) => {
+            const filePath = decodeURI(request.url.replace('file://', ''));
+            callback({ path: filePath });
         });
 
         // Load the app
@@ -272,6 +306,12 @@ if (!gotTheLock) {
 
     // App lifecycle
     app.whenReady().then(() => {
+        // Register file protocol
+        protocol.registerFileProtocol('file', (request, callback) => {
+            const filePath = request.url.replace('file://', '');
+            callback({ path: decodeURI(filePath) });
+        });
+
         console.log('App ready, creating window...');
         createWindow();
         createTray();

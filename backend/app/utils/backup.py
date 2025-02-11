@@ -6,7 +6,10 @@ import shutil
 import gzip
 from datetime import datetime
 from pathlib import Path
-from ..config import BASE_DIR
+from ..config import Config
+
+# Get base directory from config
+BASE_DIR = Config.BASE_DIR
 
 def backup_database(max_backups=5):
     """

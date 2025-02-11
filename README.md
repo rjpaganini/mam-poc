@@ -1,144 +1,91 @@
-# Media Asset Management Platform (MAM)
+# Media Asset Manager (MAM)
 
-A lightweight, local media asset management platform for organizing and accessing media files.
+Version: 1.0.1
+Last Updated: February 10, 2025
 
-## 🚀 Quick Start
+Simple media asset management system with real-time updates.
 
-1. Double-click `launch_mam.command` on your desktop
-2. Wait for all services to start
-3. The application will open automatically
+## Quick Start
 
-## 🔧 System Architecture
-
-The platform consists of three main services:
-
-### Backend Service (Port 5001)
-- Flask-based REST API
-- Handles media scanning and metadata extraction
-- Manages the SQLite database
-- Auto-reloads in development mode for quick iterations
-
-### Frontend Service (Port 3001)
-- React-based user interface
-- Real-time media browsing
-- Thumbnail generation and preview
-- Communicates with backend API
-
-### Electron Application
-- Desktop application wrapper
-- Native system integration
-- Direct file system access
-
-## 🛠 Development Mode (Default)
-
-The application runs in development mode by default, providing:
-- Auto-reload for backend changes
-- Hot-reload for frontend changes
-- Detailed logging
-- Enhanced error messages
-
-To start in development mode:
 ```bash
-# Just double-click launch_mam.command
-# Or run from terminal:
-./launch_mam.command
+# Backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Frontend
+npm install
+npm start
 ```
 
-## 🏭 Production Mode
+## Key Features
+- 📁 Media file management
+- 🔄 Real-time updates via WebSocket
+- 🖼️ Automatic thumbnail generation
+- 🔍 Search and filtering
+- 📊 Basic media processing
 
-For testing production behavior:
+## System Requirements
+- Python 3.12+ (Tested with 3.12.1)
+- Node.js 18+ (Tested with 18.19.0)
+- FFmpeg (Tested with 6.1)
+- PostgreSQL 14+ (Tested with 14.10)
+
+## Development Setup
+
+1. Configure Environment
 ```bash
-DEV_MODE=false ./launch_mam.command
+cp .env.example .env
+# Edit .env with your settings
 ```
 
-Production mode features:
-- Disabled auto-reloader
-- Optimized performance
-- Minimal logging
-- Stable process management
+2. Start Services
+```bash
+# Start backend (localhost:5001)
+python run.py
 
-## 📊 Logging
-
-All logs are stored in the `logs` directory:
-- `launcher.log`: Service startup/shutdown logs
-- `backend.log`: Flask API logs
-- `frontend.log`: React development server logs
-- `electron.log`: Desktop application logs
-
-Logs automatically rotate when they exceed 10MB.
-
-## 🔍 Troubleshooting
-
-### Port Conflicts
-If you see "port already in use" errors:
-1. Close the application
-2. Double-click `launch_mam.command` again
-   - It will automatically clean up existing processes
-   - Start fresh instances of all services
-
-### Service Issues
-If any service fails to start:
-1. Check the specific service log in the `logs` directory
-2. Ensure all dependencies are installed
-3. Verify port availability
-
-### Common Solutions
-- **Backend Issues**: Check `backend.log` for Python errors
-- **Frontend Issues**: Check `frontend.log` for npm/React errors
-- **Electron Issues**: Check `electron.log` for startup errors
-
-## 🔄 Services Communication
-
-```
-Electron App
-     ↕️
-React Frontend (3001) ←→ Flask Backend (5001)
-     ↕️                        ↕️
-  UI/Assets              Local Media Files
+# Start frontend (localhost:3000)
+npm start
 ```
 
-## 📁 Project Structure
+## Project Structure
 ```
 mam-poc/
-├── backend/            # Flask API server
-│   ├── .venv/         # Python virtual environment
-│   └── requirements.txt
-├── frontend/          # React application
-│   ├── node_modules/
-│   └── package.json
-├── logs/             # Application logs
-├── pids/             # Process IDs for management
-└── launch_mam.command # Main launcher script
+├── backend/          # Flask backend
+├── frontend/         # React frontend
+├── scripts/         # Utility scripts
+└── docs/           # Detailed documentation
 ```
 
-## 🛡️ Error Handling
+## Common Commands
+```bash
+# Start all services
+./scripts/launch.sh start
 
-The launcher script provides:
-- Dependency verification
-- Port availability checking
-- Process cleanup
-- Service health monitoring
-- Automatic recovery attempts
-- Clear error messages
+# Check system health
+curl http://localhost:5001/api/v1/health/status
 
-## 🔐 Security Notes
+# View logs
+tail -f logs/*.log
+```
 
-- Application runs locally only
-- No external network access required
-- File access limited to configured media directory
-- No sensitive data storage
+## Documentation
+- [API Documentation](docs/API.md) - API endpoints and WebSocket protocol
+- [Development Guide](docs/DEVELOPMENT.md) - Setup and best practices
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
 
-## 📝 Development Notes
+## Ports
+- Backend API: 5001
+- Frontend: 3000
+- WebSocket: 5001/ws
 
-- Built as a proof of concept
-- Focuses on local media management
-- Designed for easy debugging
-- Emphasizes reliability over complexity
+## Quick Troubleshooting
+- Port conflicts: Check `lsof -i :5001`
+- Media not loading: Verify paths in `.env`
+- WebSocket issues: Check `logs/backend.log`
 
-## 🆘 Support
+## Version History
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-Check the logs in the following order when troubleshooting:
-1. `launcher.log` - For startup issues
-2. `backend.log` - For API/database issues
-3. `frontend.log` - For UI issues
-4. `electron.log` - For desktop app issues
+## License
+Copyright © 2025 Valen Media. All rights reserved.

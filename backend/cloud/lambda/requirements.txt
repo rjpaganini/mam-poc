@@ -1,0 +1,7 @@
+# Lambda Function Dependencies
+# Minimal set for efficient deployment
+boto3==1.36.13
+requests==2.31.0
+numpy==1.24.0
+Pillow==10.2.0  # Image processing
+opencv-python-headless==4.8.1.78  # Optimized OpenCV 

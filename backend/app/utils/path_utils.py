@@ -1,12 +1,48 @@
 # backend/app/utils/path_utils.py
-# Utilities for path sanitization and validation
+"""Simple path validation utilities"""
 
 import os
-import re
 from pathlib import Path
-from typing import Optional, Union, Dict, Any
-from ..config import MEDIA_BASE_PATH, MEDIA_LOCATIONS
-from .error_handler import MediaError
+from typing import Union, Dict, Any, Optional
+from ..config import Config
+
+class MediaError(Exception):
+    """Custom exception for media-related errors"""
+    def __init__(self, message: str, status_code: int = 500, details: Optional[Dict[str, Any]] = None):
+        self.message = message
+        self.status_code = status_code
+        self.details = details if details is not None else {}
+        super().__init__(self.message)
+
+# Legacy media locations (to be removed in future)
+MEDIA_BASE_PATH = os.getenv('MEDIA_BASE_PATH', '')
+MEDIA_LOCATIONS = {
+    'primary': {'path': os.getenv('PRIMARY_MEDIA_PATH', '')},
+    'archive': {'path': os.getenv('ARCHIVE_MEDIA_PATH', '')}
+}
+
+def validate_media_path(path: Union[str, Path]) -> bool:
+    """Validate that a path is within the allowed media directory"""
+    try:
+        path = Path(path).resolve()
+        base = Path(Config.MEDIA_PATH).resolve()
+        
+        # Basic security checks
+        if any(part.startswith('.') for part in path.parts):
+            return False
+            
+        if any(part in ['..', '~'] for part in path.parts):
+            return False
+            
+        # Check extension
+        if path.suffix.lower() not in Config.ALLOWED_EXTENSIONS:
+            return False
+            
+        # Check if within media directory
+        return str(path).startswith(str(base))
+        
+    except Exception:
+        return False
 
 def sanitize_path(path: Union[str, Path]) -> Path:
     """
@@ -33,12 +69,36 @@ def sanitize_path(path: Union[str, Path]) -> Path:
                 details={"path": str(path)}
             )
             
-        if any(part in ['..'] for part in clean_path.parts):
+        if any(part in ['..', '~'] for part in clean_path.parts):
             raise MediaError(
-                message="Invalid path: Contains parent directory references",
+                message="Invalid path: Contains unsafe path components",
                 status_code=400,
                 details={"path": str(path)}
             )
+            
+        # Check for valid file extension
+        if clean_path.suffix.lower() not in Config.ALLOWED_EXTENSIONS:
+            raise MediaError(
+                message="Invalid file type",
+                status_code=400,
+                details={
+                    "path": str(path),
+                    "allowed_extensions": list(Config.ALLOWED_EXTENSIONS)
+                }
+            )
+            
+        # Check file size if file exists
+        if clean_path.exists() and clean_path.is_file():
+            if clean_path.stat().st_size > Config.MAX_FILE_SIZE:
+                raise MediaError(
+                    message="File exceeds maximum allowed size",
+                    status_code=400,
+                    details={
+                        "path": str(path),
+                        "size": clean_path.stat().st_size,
+                        "max_size": Config.MAX_FILE_SIZE
+                    }
+                )
             
         return clean_path
         
@@ -46,28 +106,10 @@ def sanitize_path(path: Union[str, Path]) -> Path:
         if isinstance(e, MediaError):
             raise
         raise MediaError(
-            message=f"Invalid path: {str(e)}",
+            message="Path validation error",
             status_code=400,
-            details={"path": str(path)}
+            details={"path": str(path), "error": str(e)}
         )
-
-def validate_media_path(path: Union[str, Path], base_path: Optional[Union[str, Path]] = None) -> bool:
-    """
-    Validate that a path is within the allowed media directory.
-    
-    Args:
-        path: Path to validate
-        base_path: Optional base path to check against
-        
-    Returns:
-        bool: True if path is valid
-    """
-    try:
-        path = Path(path).resolve()
-        base = Path(base_path or MEDIA_BASE_PATH).resolve()
-        return str(path).startswith(str(base))
-    except Exception:
-        return False
 
 def validate_media_access(filepath: Union[str, Path]) -> Dict[str, Any]:
     """

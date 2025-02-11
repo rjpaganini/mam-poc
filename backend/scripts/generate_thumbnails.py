@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+import asyncio
 
 # Add the backend directory to the Python path
 backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,7 +14,7 @@ from app.database import db
 from app.models import MediaAsset
 from app.utils.extract_metadata import generate_thumbnail
 
-def generate_all_thumbnails():
+async def generate_all_thumbnails():
     """Generate thumbnails for all video assets in the database."""
     app = create_app()
     with app.app_context():
@@ -29,7 +30,7 @@ def generate_all_thumbnails():
                 
                 try:
                     # Generate thumbnail
-                    thumbnail_path = generate_thumbnail(asset.file_path)
+                    thumbnail_path = await generate_thumbnail(asset.file_path)
                     if thumbnail_path:
                         # Initialize media_metadata if None
                         if asset.media_metadata is None:
@@ -64,4 +65,4 @@ def generate_all_thumbnails():
             raise
 
 if __name__ == "__main__":
-    generate_all_thumbnails() 
+    asyncio.run(generate_all_thumbnails()) 

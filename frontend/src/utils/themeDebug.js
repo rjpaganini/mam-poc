@@ -1,173 +1,112 @@
 /**
- * Theme debugging utilities
- * Comprehensive tools for tracking and validating theme application
+ * Theme debug tools - DEV only
  */
 
 import logger from '../services/logger';
 
-/**
- * Debug levels for theme validation
- */
-const DEBUG_LEVELS = {
-    ERROR: 'error',
-    WARN: 'warn',
-    INFO: 'info'
-};
+// Debug levels
+const LEVELS = { ERR: 'error', WARN: 'warn', INFO: 'info' };
 
-/**
- * Critical UI elements to validate
- */
-const CRITICAL_ELEMENTS = {
-    controls: {
-        selectors: ['button', 'input', 'select'],
-        expectedHeight: '24px',
-        expectedFontSize: '0.7rem'
+// UI elements to validate
+const ELEMENTS = {
+    ctrl: {
+        sel: ['button', 'input', 'select'],
+        height: '24px',
+        fontSize: '0.7rem'
     },
-    metadata: {
-        selectors: ['.metadataItem', '.metadataLabel', '.metadataValue'],
-        expectedFontSize: '0.4rem',
-        expectedLineHeight: '1'
+    meta: {
+        sel: ['.metadataItem', '.metadataLabel', '.metadataValue'],
+        fontSize: '0.4rem',
+        lineHeight: '1'
     },
-    titles: {
-        selectors: ['.title', 'h1', 'h2', 'h3'],
-        expectedLineHeight: '1.2'
+    title: {
+        sel: ['.title', 'h1', 'h2', 'h3'],
+        lineHeight: '1.2'
     }
 };
 
-/**
- * Detailed theme information logger
- * @param {Object} theme - The theme object to debug
- */
-export const debugTheme = (theme) => {
+// Log theme info in dev
+export const debugTheme = theme => {
     if (process.env.NODE_ENV !== 'development') return;
 
-    logger.info('Theme Debug Information:', {
+    logger.info('Theme Debug:', {
         palette: {
             mode: theme.palette.mode,
-            background: theme.palette.background,
+            bg: theme.palette.background,
             text: theme.palette.text,
-            primary: theme.palette.primary,
-            error: theme.palette.error,
-            success: theme.palette.success
+            primary: theme.palette.primary
         },
         typography: {
-            fontFamily: theme.typography.fontFamily,
-            fontSize: theme.typography.fontSize,
-            fontWeights: {
-                light: theme.typography.fontWeightLight,
-                regular: theme.typography.fontWeightRegular,
-                medium: theme.typography.fontWeightMedium,
-                bold: theme.typography.fontWeightBold
-            }
+            font: theme.typography.fontFamily,
+            size: theme.typography.fontSize,
+            weights: theme.typography.fontWeightMedium
         },
         spacing: theme.spacing(1),
-        shape: theme.shape,
-        timestamp: new Date().toISOString()
+        shape: theme.shape
     });
 };
 
-/**
- * Validates computed styles against theme specifications
- * @param {Element} element - DOM element to validate
- * @param {Object} expectedStyles - Expected style values
- * @returns {Array} Array of validation issues
- */
-const validateElementStyles = (element, expectedStyles) => {
-    const computedStyle = window.getComputedStyle(element);
-    const issues = [];
-
-    Object.entries(expectedStyles).forEach(([property, expectedValue]) => {
-        const actualValue = computedStyle[property];
-        if (actualValue !== expectedValue) {
-            issues.push({
-                element: element.tagName.toLowerCase(),
-                class: element.className,
-                property,
-                expected: expectedValue,
-                actual: actualValue,
-                level: DEBUG_LEVELS.WARN
-            });
-        }
-    });
-
-    return issues;
+// Validate element styles
+const validateStyles = (el, expected) => {
+    const style = window.getComputedStyle(el);
+    return Object.entries(expected).map(([prop, exp]) => {
+        const act = style[prop];
+        return act !== exp ? {
+            el: el.tagName.toLowerCase(),
+            class: el.className,
+            prop, exp, act,
+            level: LEVELS.WARN
+        } : null;
+    }).filter(Boolean);
 };
 
-/**
- * Verifies theme application to DOM
- * @param {Object} theme - Current theme object
- */
-export const verifyThemeApplication = (theme) => {
+// Verify theme application
+export const verifyTheme = theme => {
     if (process.env.NODE_ENV !== 'development') return;
 
     const issues = [];
 
-    // Check critical UI elements
-    Object.entries(CRITICAL_ELEMENTS).forEach(([group, config]) => {
-        config.selectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const elementIssues = validateElementStyles(element, {
-                    height: config.expectedHeight,
-                    fontSize: config.expectedFontSize,
-                    lineHeight: config.expectedLineHeight
-                });
-                issues.push(...elementIssues);
+    // Check elements
+    Object.entries(ELEMENTS).forEach(([group, cfg]) => {
+        cfg.sel.forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+                issues.push(...validateStyles(el, {
+                    height: cfg.height,
+                    fontSize: cfg.fontSize,
+                    lineHeight: cfg.lineHeight
+                }));
             });
         });
     });
 
-    // Log validation results
-    if (issues.length > 0) {
-        logger.warn('Theme Validation Issues:', {
-            timestamp: new Date().toISOString(),
-            issueCount: issues.length,
-            issues: issues.map(issue => ({
-                ...issue,
-                suggestion: getSuggestion(issue)
+    // Log results
+    if (issues.length) {
+        logger.warn('Theme Issues:', {
+            count: issues.length,
+            issues: issues.map(i => ({
+                ...i,
+                fix: getFix(i)
             }))
         });
     } else {
-        logger.info('Theme Validation Passed:', {
-            timestamp: new Date().toISOString()
-        });
+        logger.info('Theme Valid');
     }
 };
 
-/**
- * Provides suggestions for fixing theme issues
- * @param {Object} issue - The theme validation issue
- * @returns {string} Suggestion for fixing the issue
- */
-const getSuggestion = (issue) => {
-    const suggestions = {
-        height: 'Use height: "24px" for consistent control sizing',
-        fontSize: 'Use theme.typography.fontSize values with !important when needed',
-        lineHeight: 'Use 1 for metadata, 1.2 for titles',
-        color: 'Use theme.colors values instead of hardcoded colors',
-        padding: 'Use multiples of 4px (0.25rem) for padding'
-    };
+// Get fix suggestion
+const getFix = ({ prop }) => ({
+    height: 'Use 24px',
+    fontSize: 'Use theme.typography.fontSize',
+    lineHeight: 'Use 1 for meta, 1.2 for titles'
+})[prop] || 'See THEMING.md';
 
-    return suggestions[issue.property] || 'Refer to THEMING.md for guidance';
-};
-
-/**
- * Monitors theme changes and validates application
- * @param {Object} theme - Current theme object
- */
-export const monitorThemeChanges = (theme) => {
+// Monitor theme changes
+export const monitorThemeChanges = theme => {
     debugTheme(theme);
     
-    // Validate theme application after DOM updates
-    setTimeout(() => {
-        verifyThemeApplication(theme);
-    }, 0);
+    setTimeout(() => verifyTheme(theme), 0);
 
-    // Set up mutation observer for dynamic changes
-    const observer = new MutationObserver(() => {
-        verifyThemeApplication(theme);
-    });
-
+    const observer = new MutationObserver(() => verifyTheme(theme));
     observer.observe(document.body, {
         childList: true,
         subtree: true,
@@ -175,8 +114,6 @@ export const monitorThemeChanges = (theme) => {
         attributeFilter: ['style', 'class']
     });
 
-    // Cleanup observer on development only
-    if (process.env.NODE_ENV === 'development') {
-        return () => observer.disconnect();
-    }
+    return process.env.NODE_ENV === 'development' ? 
+        () => observer.disconnect() : undefined;
 }; 

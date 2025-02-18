@@ -1,59 +1,71 @@
-"""Initialize database and scan media files"""
+"""Initialize a fresh database for the Media Asset Manager
 
-from pathlib import Path
+IMPORTANT: This script will DELETE your existing database and create a new one!
+Only use this script when you need a completely fresh start.
+
+Common scenarios for using this script:
+1. First-time setup: When you're setting up the project for the first time
+2. Database corruption: If your database becomes corrupted and needs a reset
+3. Schema changes: After major database structure changes that require a fresh start
+4. Testing/Development: When you need a clean slate for testing new features
+
+Workflow:
+1. This script will DELETE the existing database at data/merged.db
+2. Create a new, empty database with the latest schema
+3. After running this, you must run scan_media.py to repopulate the database
+
+Example usage:
+```bash
+# 1. Create fresh database
+python backend/scripts/init_db.py
+
+# 2. Scan media to populate the database
+python backend/scripts/scan_media.py
+
+# 3. Generate thumbnails
+python backend/scripts/cleanup_thumbnails.py
+```
+
+WARNING: Running this script will erase all existing data! Make sure to:
+1. Backup your existing database if needed
+2. Inform other team members before running in production
+3. Be prepared to rescan all media files
+"""
+
 from backend.app import create_app
 from backend.app.database import db
-from backend.app.models import MediaAsset
-from backend.app.utils.extract_metadata import extract_metadata
-from backend.app.config import Config
 
 def init_database():
-    """Initialize database and scan media directory"""
+    """Initialize a fresh, empty database
+    
+    This function:
+    1. Connects to the database location (data/merged.db)
+    2. Drops all existing tables (WARNING: destructive operation!)
+    3. Creates new tables with the latest schema
+    """
     # Create Flask app and push context
     app = create_app()
     app.app_context().push()
     
-    # Recreate database
-    db.drop_all()
-    db.create_all()
-    print("Database initialized")
+    print("Creating fresh database...")
     
-    # Scan media directory
-    media_dir = Path(Config.MEDIA_PATH)
-    if not media_dir.exists():
-        print(f"Media directory not found: {media_dir}")
-        return
+    try:
+        # Step 1: Drop existing tables (THIS DELETES ALL DATA!)
+        db.drop_all()
+        print("✓ Cleared existing database")
         
-    new_files = 0
-    for ext in Config.ALLOWED_EXTENSIONS:
-        for file_path in media_dir.glob(f"**/*{ext}"):
-            try:
-                # Extract video metadata
-                metadata = extract_metadata(file_path)
-                
-                # Create new asset
-                asset = MediaAsset(
-                    title=file_path.stem,
-                    file_path=str(file_path),
-                    file_size=file_path.stat().st_size,
-                    duration=metadata.get('duration'),
-                    width=metadata.get('width'),
-                    height=metadata.get('height'),
-                    codec=metadata.get('codec')
-                )
-                db.session.add(asset)
-                new_files += 1
-                print(f"Added: {file_path.name}")
-                
-            except Exception as e:
-                print(f"Error processing {file_path}: {e}")
-                continue
-    
-    if new_files > 0:
-        db.session.commit()
-        print(f"\nScan complete. Added {new_files} new files.")
-    else:
-        print("\nNo new files found.")
+        # Step 2: Create new tables with latest schema
+        db.create_all()
+        print("✓ Created new tables")
+        
+        print("\nDatabase initialized successfully!")
+        print("\nNext steps:")
+        print("1. Run 'python backend/scripts/scan_media.py' to scan your media files")
+        print("2. Run 'python backend/scripts/cleanup_thumbnails.py' to manage thumbnails")
+        
+    except Exception as e:
+        print(f"\n❌ Error initializing database: {str(e)}")
+        raise e
 
 if __name__ == '__main__':
     init_database() 

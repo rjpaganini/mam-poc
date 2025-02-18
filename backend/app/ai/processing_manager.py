@@ -17,11 +17,19 @@ from pathlib import Path
 
 from ..database import db
 from ..models import MediaAsset
-from ..websocket import broadcast_message as send_ws_message
+from ..extensions import socketio
 from .processor_manager import ProcessorManager
-from ..utils.extract_metadata import extract_enhanced_metadata
+from ..utils import extract_metadata  # Fixed import
 
 logger = logging.getLogger(__name__)
+
+# Helper function to replace the old broadcast_message
+async def send_ws_message(data: Dict[str, Any]):
+    """Send a message through WebSocket."""
+    try:
+        socketio.emit('message', data)
+    except Exception as e:
+        logger.error(f"Failed to send WebSocket message: {e}")
 
 class ProcessingManager:
     """
@@ -36,6 +44,7 @@ class ProcessingManager:
         self._is_processing = False
         self._processing_tasks: List[asyncio.Task] = []
         self.MAX_CONCURRENT_TASKS = 3  # Maximum number of concurrent processing tasks
+        self.current_task: Optional[str] = None
     
     async def start_processing_worker(self):
         """Start the background processing worker."""
@@ -100,7 +109,7 @@ class ProcessingManager:
             })
             
             # Extract enhanced metadata
-            metadata = await extract_enhanced_metadata(asset.file_path)
+            metadata = await extract_metadata.extract_enhanced_metadata(asset.file_path)
             if not metadata:
                 raise RuntimeError("Failed to extract metadata")
             
@@ -194,6 +203,12 @@ class ProcessingManager:
                 'status': 'error',
                 'error': str(e)
             }
+
+    def emit_status(self, status: str, data: dict = None):
+        """Emit status update via WebSocket"""
+        if data is None:
+            data = {}
+        socketio.emit('processing_status', {'status': status, **data})
 
 # Create singleton instance
 processing_manager = ProcessingManager() 

@@ -1,9 +1,13 @@
 import React from 'react';
-import { Box, Button } from '@mui/material';
+import { Box, Button, Tooltip } from '@mui/material';
 import config from '../config';
-import { FaSync } from 'react-icons/fa';
+import { FaSync, FaChartLine } from 'react-icons/fa';
+import { Link, useLocation } from 'react-router-dom';
 
 const Header = ({ onScanClick }) => {
+    const location = useLocation();
+    const isMetricsPage = location.pathname === '/metrics';
+
     return (
         <Box sx={{
             display: 'flex',
@@ -49,6 +53,23 @@ const Header = ({ onScanClick }) => {
             >
                 Scan Media
             </Button>
+
+            <Tooltip title="AWS Metrics Dashboard" arrow>
+                <Button
+                    component={Link}
+                    to="/metrics"
+                    variant={isMetricsPage ? "contained" : "outlined"}
+                    startIcon={<FaChartLine />}
+                    size="small"
+                    sx={{
+                        borderRadius: 1,
+                        textTransform: 'none',
+                        fontSize: '0.8rem'
+                    }}
+                >
+                    Metrics
+                </Button>
+            </Tooltip>
         </Box>
     );
 };

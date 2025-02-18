@@ -1,10 +1,13 @@
 # run.py
-# Development server entry point - Limited WebSocket Support
+# Development server entry point with WebSocket support
 # For production or WebSocket features, use main.py instead
+
+import eventlet
+eventlet.monkey_patch()
 
 import os
 import sys
-from app import create_app
+from app import create_app, socketio
 from app.config import Config
 import logging
 import warnings
@@ -15,14 +18,14 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('app.log')
+        logging.FileHandler('logs/backend.log')
     ]
 )
 
 logger = logging.getLogger(__name__)
 
 def main():
-    """Initialize and run the development server."""
+    """Initialize and run the development server with WebSocket support."""
     try:
         # Display warning about WebSocket limitations
         warnings.warn(
@@ -43,7 +46,7 @@ def main():
         app = create_app()
         
         # Get host and port from environment or use defaults
-        host = os.getenv('API_HOST', '127.0.0.1')
+        host = '0.0.0.0'  # Bind to all interfaces
         port = int(os.getenv('API_PORT', '5001'))
         
         # Log startup configuration
@@ -54,13 +57,14 @@ def main():
         logger.info(f"Environment: {os.getenv('FLASK_ENV', 'development')}")
         logger.info("⚠️  WebSocket features are limited in development server")
         
-        # Run the application
-        app.run(
-            host=host,
-            port=port,
-            debug=True,  # Enable debug mode for development
-            use_reloader=True  # Enable auto-reload on code changes
-        )
+        # Run the application with Socket.IO support
+        socketio.run(app, 
+                    host=host, 
+                    port=port, 
+                    debug=True,
+                    use_reloader=False,  # Disable reloader to prevent conflicts
+                    log_output=True)  # Enable logging for better debugging
+        
     except Exception as e:
         logger.error(f"Failed to start application: {str(e)}", exc_info=True)
         sys.exit(1)

@@ -40,21 +40,58 @@ import { formatFileSize, formatDuration, formatFPS, formatBitrate } from '../../
 import { ArrowUpward, ArrowDownward } from '@mui/icons-material';
 
 /**
- * Column Definitions
- * Defines the structure and behavior of each column in the list view
- * Each column object specifies:
- * - field: Database field name
- * - headerName: Display name
- * - width/flex: Sizing behavior
- * - sortable: Whether column can be sorted
- * - valueGetter: Data access function
- * - valueFormatter: Display format function
+ * Enhanced column definitions with proper metadata access
  */
-export const columns = [
-    { id: 'title', label: 'Title', sortable: true },
-    { id: 'duration', label: 'Duration', sortable: true },
-    { id: 'size', label: 'Size', sortable: true },
-    { id: 'date', label: 'Added', sortable: true }
+const columns = [
+    { 
+        id: 'title', 
+        label: 'Title', 
+        sortable: true,
+        getValue: (asset) => asset.title
+    },
+    { 
+        id: 'duration', 
+        label: 'Duration', 
+        sortable: true,
+        getValue: (asset) => formatDuration(asset.duration)
+    },
+    { 
+        id: 'size', 
+        label: 'Size', 
+        sortable: true,
+        getValue: (asset) => formatFileSize(asset.file_size)
+    },
+    { 
+        id: 'resolution', 
+        label: 'Resolution', 
+        sortable: true,
+        getValue: (asset) => asset.width && asset.height ? `${asset.width}×${asset.height}` : '-'
+    },
+    { 
+        id: 'fps', 
+        label: 'FPS', 
+        sortable: true,
+        getValue: (asset) => asset.fps ? formatFPS(asset.fps) : '-'
+    },
+    { 
+        id: 'codec', 
+        label: 'Codec', 
+        sortable: true,
+        getValue: (asset) => asset.codec ? asset.codec.toUpperCase() : '-'
+    },
+    { 
+        id: 'format', 
+        label: 'Format', 
+        sortable: true,
+        getValue: (asset) => {
+            const format = asset.file_path?.split('.').pop()?.toUpperCase() || '-';
+            return {
+                display: format,
+                sort: format // Separate sort value for consistent sorting
+            };
+        },
+        display: (value) => value.display || '-' // Display the formatted value
+    }
 ];
 
 // Error boundary for ListView component
@@ -84,7 +121,29 @@ const styles = {
         backgroundColor: theme.palette.background.paper,
         borderRadius: theme.shape.borderRadius,
         overflow: 'hidden',
-        border: `1px solid ${theme.palette.divider}`
+        border: `1px solid ${theme.palette.divider}`,
+        // Add global focus styles
+        '& .MuiOutlinedInput-root': {
+            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                borderColor: theme.palette.error.main,
+                borderWidth: '2px'
+            }
+        },
+        '& .MuiInputBase-root.Mui-focused': {
+            '& > fieldset': {
+                borderColor: `${theme.palette.error.main} !important`
+            }
+        },
+        // Override default focus color for all interactive elements
+        '& *:focus': {
+            outline: `2px solid ${theme.palette.error.main} !important`,
+            outlineOffset: '2px'
+        },
+        '& .MuiInputBase-root:focus-within': {
+            '& > fieldset': {
+                borderColor: `${theme.palette.error.main} !important`
+            }
+        }
     }),
     header: theme => ({
         display: 'flex',
@@ -164,17 +223,6 @@ const ListView = ({
         }
     };
 
-    // Get cell value based on column
-    const getCellValue = (asset, column) => {
-        switch (column) {
-            case 'title': return asset.title;
-            case 'duration': return formatDuration(asset.media_metadata?.duration);
-            case 'size': return formatFileSize(asset.file_size);
-            case 'date': return new Date(asset.created_at).toLocaleDateString();
-            default: return '';
-        }
-    };
-
     // Render sort direction indicator
     const renderSortIcon = (field) => {
         if (sortBy !== field) return null;
@@ -204,35 +252,86 @@ const ListView = ({
         });
     }, [assets, searchQuery, selectedTags]);
 
+    // Sort the filtered assets
+    const sortedAssets = useMemo(() => {
+        if (!sortBy) return filteredAssets;
+        
+        const column = columns.find(col => col.id === sortBy);
+        if (!column) return filteredAssets;
+
+        return [...filteredAssets].sort((a, b) => {
+            const aValue = column.getValue(a);
+            const bValue = column.getValue(b);
+            
+            // Handle sort values for format column
+            const aSort = aValue?.sort !== undefined ? aValue.sort : aValue;
+            const bSort = bValue?.sort !== undefined ? bValue.sort : bValue;
+            
+            if (aSort === bSort) return 0;
+            if (aSort === '-') return 1;
+            if (bSort === '-') return -1;
+            
+            const result = aSort < bSort ? -1 : 1;
+            return sortDirection === 'asc' ? result : -result;
+        });
+    }, [filteredAssets, sortBy, sortDirection]);
+
     return (
         <ListViewErrorBoundary>
-            <TableContainer component={Paper}>
-                <Table size="small">
+            <TableContainer 
+                component={Paper} 
+                sx={{ 
+                    maxHeight: 'calc(100vh - 200px)',
+                    '& .MuiTableCell-root': {
+                        py: 0.5,
+                        px: 1,
+                        fontSize: '0.7rem',
+                        height: '24px',
+                        whiteSpace: 'nowrap'
+                    }
+                }}
+            >
+                <Table size="small" stickyHeader>
                     <TableHead>
                         <TableRow>
                             {columns.map(col => (
-                                <TableCell key={col.id}>
-                                    {col.sortable ? (
-                                        <IconButton size="small" onClick={() => handleSort(col.id)}>
-                                            {col.label}
-                                            {renderSortIcon(col.id)}
-                                        </IconButton>
-                                    ) : col.label}
+                                <TableCell 
+                                    key={col.id}
+                                    sx={{
+                                        backgroundColor: 'background.paper',
+                                        fontWeight: 'medium',
+                                        cursor: col.sortable ? 'pointer' : 'default',
+                                        userSelect: 'none',
+                                        '&:hover': col.sortable ? {
+                                            backgroundColor: 'action.hover'
+                                        } : {}
+                                    }}
+                                    onClick={() => col.sortable && handleSort(col.id)}
+                                >
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                        {col.label}
+                                        {col.sortable && renderSortIcon(col.id)}
+                                    </Box>
                                 </TableCell>
                             ))}
                         </TableRow>
                     </TableHead>
                     <TableBody>
-                        {filteredAssets.map(asset => (
+                        {sortedAssets.map(asset => (
                             <TableRow 
                                 key={asset.id}
                                 hover
                                 onClick={() => navigate(`/asset/${asset.id}`)}
-                                sx={{ cursor: 'pointer' }}
+                                sx={{ 
+                                    cursor: 'pointer',
+                                    '&:hover': {
+                                        backgroundColor: 'action.hover'
+                                    }
+                                }}
                             >
                                 {columns.map(col => (
                                     <TableCell key={col.id}>
-                                        {getCellValue(asset, col.id)}
+                                        {col.display ? col.display(col.getValue(asset)) : col.getValue(asset)}
                                     </TableCell>
                                 ))}
                             </TableRow>

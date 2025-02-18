@@ -1,183 +1,317 @@
 # Troubleshooting Guide
 
-Version: 1.0.1
-Last Updated: February 10, 2025
-Applies to: MAM v1.0.0 and later
+Version: 1.0.2
+Last Updated: February 13, 2025
 
-## Quick Fixes
+## Quick Reference
 
-### Service Won't Start
-1. Check ports in use:
 ```bash
-lsof -i :5001
-lsof -i :3000
+# Check service status
+./scripts/mam status
+
+# View service logs
+./scripts/mam logs
+
+# Check system health
+./scripts/mam health
+
+# Verify environment
+./scripts/mam env check
 ```
 
-2. Verify Python environment:
+## Common Issues
+
+### 1. Application Won't Start
+
+#### Service Issues
+```
+Error: Service failed to start
+```
+**Solution:**
+1. Check service status:
 ```bash
-which python
-python --version
+./scripts/mam status
+```
+2. View service logs:
+```bash
+./scripts/mam logs
+```
+3. Restart services:
+```bash
+./scripts/mam restart
 ```
 
-3. Check Node version:
+#### Individual Service Issues
+```
+Error: Specific service not responding
+```
+**Solution:**
+1. Check specific service:
 ```bash
-node --version
+./scripts/mam logs backend   # For backend issues
+./scripts/mam logs frontend  # For frontend issues
+```
+2. Restart specific service:
+```bash
+./scripts/mam restart backend
+./scripts/mam restart frontend
 ```
 
-### Media Not Loading
-1. Verify file permissions:
+### 2. Media Files Not Loading
+
+#### File Path Issues
+```
+Error: Media file not found
+```
+**Solution:**
+1. Verify media files:
 ```bash
-ls -l /path/to/media
+./scripts/mam maint verify
+```
+2. Check logs for details:
+```bash
+./scripts/mam logs backend
 ```
 
-2. Check FFmpeg installation:
+#### Streaming Issues
+```
+Error: Failed to load video
+```
+**Solution:**
+1. Check service health:
 ```bash
-ffmpeg -version
+./scripts/mam health
+```
+2. Verify media files:
+```bash
+./scripts/mam maint verify
+```
+3. View detailed logs:
+```bash
+./scripts/mam logs
 ```
 
-3. Verify media paths in `.env`:
+### 3. Thumbnail Generation Fails
+
+#### Generation Issues
+```
+Error: Thumbnail generation failed
+```
+**Solution:**
+1. Regenerate thumbnails:
 ```bash
-MEDIA_ROOT=/path/to/media
+./scripts/mam maint thumbnails
+```
+2. Check logs for errors:
+```bash
+./scripts/mam logs backend
 ```
 
-### WebSocket Issues
-1. Check WebSocket logs:
+#### Storage Issues
+```
+Error: No space left on device
+```
+**Solution:**
+1. Clean temporary files:
 ```bash
-tail -f logs/backend.log
+./scripts/mam maint cleanup
+```
+2. Check system health:
+```bash
+./scripts/mam health
 ```
 
-2. Verify connection URL:
-```javascript
-ws://localhost:5001/ws
+### 4. Database Issues
+
+#### Connection Errors
+```
+Error: Database is locked
+```
+**Solution:**
+1. Check database status:
+```bash
+./scripts/mam db verify
+```
+2. Create backup:
+```bash
+./scripts/mam db backup
+```
+3. Reinitialize if needed:
+```bash
+./scripts/mam db init
 ```
 
-3. Monitor connection status in browser console
-
-## Common Error Messages
-
-### Backend Errors
-
-#### "Port already in use"
+#### Corruption Issues
+```
+Error: Database is corrupted
+```
+**Solution:**
+1. Stop services:
 ```bash
-# Kill existing process
-lsof -i :5001 | grep LISTEN
-kill -9 <PID>
+./scripts/mam stop
+```
+2. Verify database:
+```bash
+./scripts/mam db verify
+```
+3. Restore from backup:
+```bash
+./scripts/mam db merge <backup_path>
 ```
 
-#### "FFmpeg not found"
+### 5. Environment Issues
+
+#### Python Environment
+```
+Error: Python environment issues
+```
+**Solution:**
+1. Check environment:
 ```bash
-# Install FFmpeg
-brew install ffmpeg  # macOS
-apt-get install ffmpeg  # Ubuntu
+./scripts/mam env check
+```
+2. View environment logs:
+```bash
+./scripts/mam logs
 ```
 
-#### "Database connection failed"
-1. Check PostgreSQL service:
+#### Node/Electron Issues
+```
+Error: Frontend build fails
+```
+**Solution:**
+1. Check environment:
 ```bash
-pg_isready
+./scripts/mam env check
+```
+2. Restart frontend:
+```bash
+./scripts/mam restart frontend
 ```
 
-2. Verify database URL:
+### 6. Performance Issues
+
+#### Slow Loading
+```
+Error: Request timeout
+```
+**Solution:**
+1. Check service health:
 ```bash
-# .env file
-DATABASE_URL=postgresql://user:pass@localhost/mam
+./scripts/mam health
+```
+2. View performance logs:
+```bash
+./scripts/mam logs
+```
+3. Restart services:
+```bash
+./scripts/mam restart
 ```
 
-### Frontend Errors
-
-#### "Failed to compile"
-1. Clear node_modules:
+#### Memory Issues
+```
+Error: Out of memory
+```
+**Solution:**
+1. Stop services:
 ```bash
-rm -rf node_modules
-npm install
+./scripts/mam stop
+```
+2. Clean temporary files:
+```bash
+./scripts/mam maint cleanup
+```
+3. Restart services:
+```bash
+./scripts/mam start
 ```
 
-2. Check for TypeScript errors:
+### 7. Maintenance
+
+#### Regular Maintenance
 ```bash
-npm run typecheck
+# Full maintenance
+./scripts/mam maint all
+
+# Individual tasks
+./scripts/mam maint thumbnails  # Regenerate thumbnails
+./scripts/mam maint durations   # Check media durations
+./scripts/mam maint cleanup     # Clean temporary files
+./scripts/mam maint verify      # Verify media files
 ```
 
-#### "WebSocket connection failed"
-1. Verify backend is running
-2. Check CORS settings
-3. Verify WebSocket URL
-
-## System Health
-
-### Check Services
+#### Health Checks
 ```bash
-# Backend health
-curl http://localhost:5001/api/v1/health/status
+# Full health check
+./scripts/mam health
 
-# Database connection
-python scripts/check_db.py
+# Service status
+./scripts/mam status
 
-# Media storage
-python scripts/check_storage.py
+# Environment check
+./scripts/mam env check
 ```
 
-### View Logs
+#### Log Management
 ```bash
-# Backend logs
-tail -f logs/backend.log
+# View all logs
+./scripts/mam logs
 
-# Frontend logs
-tail -f logs/frontend.log
+# View specific logs
+./scripts/mam logs backend
+./scripts/mam logs frontend
+```
 
-# All logs
+## Diagnostic Commands
+
+### System Status
+```bash
+# Check all services
+./scripts/health_check.sh
+
+# View logs
 tail -f logs/*.log
+
+# Check ports
+lsof -i :5001
+lsof -i :3001
 ```
 
-### Monitor Resources
+### Database
 ```bash
-# Disk space
-df -h
+# Check integrity
+sqlite3 data/merged.db "PRAGMA integrity_check;"
 
-# Memory usage
-top -o mem
+# Backup database
+./scripts/backup_db.sh
 
-# Process status
-ps aux | grep python
-ps aux | grep node
+# View recent entries
+sqlite3 data/merged.db "SELECT * FROM media_assets ORDER BY updated_at DESC LIMIT 5;"
 ```
 
-## Recovery Steps
-
-### Database Reset
+### File System
 ```bash
-# Backup current data
-pg_dump mam > backup.sql
+# Check permissions
+ls -l data/
+ls -l media/
 
-# Reset database
-python scripts/reset_db.py
+# View disk usage
+du -sh data/
+du -sh media/
 
-# Restore from backup
-psql mam < backup.sql
+# Find large files
+find . -type f -size +100M
 ```
 
-### Clear Cache
+### Process Management
 ```bash
-# Clear thumbnails
-rm -rf cache/thumbnails/*
+# View processes
+ps aux | grep mam-poc
 
-# Clear media cache
-rm -rf cache/media/*
+# Kill processes
+pkill -f mam-poc
 
-# Clear temporary files
-rm -rf tmp/*
-```
-
-### Reset Application
-1. Stop all services
-2. Clear all caches
-3. Reset database
-4. Restart services
-
-## Getting Help
-1. Check logs first
-2. Review configuration
-3. Test system health
-4. Contact support with:
-   - Log files
-   - Error messages
-   - Steps to reproduce 
+# Monitor resources
+top -pid $(pgrep -f mam-poc)
+``` 

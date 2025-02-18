@@ -1,158 +1,231 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Tooltip, useTheme } from '@mui/material';
+import { Box, Popover } from '@mui/material';
 import { FaCheckCircle, FaExclamationTriangle, FaTimesCircle } from 'react-icons/fa';
 import config from '../config';
 
 /**
  * SystemHealth Component
- * Displays system health status with detailed hover information
- * Shows database and websocket connection status
+ * Displays system health status with click-to-view details
  */
 const SystemHealth = ({ wsConnected }) => {
-    const [dbStatus, setDbStatus] = useState('checking');
-    const theme = useTheme(); // Get MUI theme
-
-    // Status colors with fallbacks
-    const statusColors = {
-        success: theme.palette.success.main || '#00FF00',
-        warning: theme.palette.warning.main || '#FFC107',
-        error: theme.palette.error.main || '#FF0000'
-    };
+    const [healthData, setHealthData] = useState({
+        status: 'checking',
+        database: {
+            status: 'checking',
+            message: 'Checking database connection...'
+        }
+    });
     
-    // Check database health
+    // State for dialog visibility
+    const [isOpen, setIsOpen] = useState(false);
+    
+    // Check health status
     useEffect(() => {
-        const checkDatabase = async () => {
+        const checkHealth = async () => {
             try {
                 const response = await fetch(`${config.api.baseURL}${config.api.endpoints.health}`);
-                if (!response.ok) throw new Error('Database health check failed');
+                if (!response.ok) throw new Error('Health check failed');
                 const data = await response.json();
-                setDbStatus(data.status === 'healthy' ? 'healthy' : 'error');
+                setHealthData(data);
             } catch (error) {
-                console.error('Database health check failed:', error);
-                setDbStatus('error');
+                setHealthData(prev => ({
+                    ...prev,
+                    status: 'error',
+                    database: {
+                        ...prev.database,
+                        status: 'error',
+                        message: error.message
+                    }
+                }));
             }
         };
 
-        // Check immediately and then every 30 seconds
-        checkDatabase();
-        const interval = setInterval(checkDatabase, 30000);
+        checkHealth();
+        const interval = setInterval(checkHealth, 30000);
         return () => clearInterval(interval);
     }, []);
 
-    // Get system health details
-    const getHealthDetails = () => {
-        return [
-            {
-                name: 'Database',
-                status: dbStatus,
-                message: dbStatus === 'healthy' ? 'Connected' : 'Disconnected',
-                details: dbStatus === 'error' ? 'Database connection failed' : null
-            },
-            {
-                name: 'WebSocket',
-                status: wsConnected ? 'healthy' : 'error',
-                message: wsConnected ? 'Connected' : 'Disconnected',
-                details: wsConnected ? null : 'Real-time updates unavailable'
-            }
-        ];
-    };
-
-    // Get overall status based on both connections
-    const getOverallStatus = (details) => {
-        const statuses = details.map(d => d.status);
-        if (statuses.every(s => s === 'healthy')) return 'healthy';
-        if (statuses.every(s => s === 'error')) return 'error';
+    // Get overall status
+    const getStatus = () => {
+        if (healthData.status === 'healthy' && wsConnected) return 'healthy';
+        if (healthData.status === 'error' || !wsConnected) return 'error';
         return 'warning';
     };
 
-    const healthDetails = getHealthDetails();
-    const overallStatus = getOverallStatus(healthDetails);
-
-    // Render appropriate icon based on status
-    const getStatusIcon = () => {
-        switch (overallStatus) {
+    // Get status icon
+    const getIcon = () => {
+        const status = getStatus();
+        switch (status) {
             case 'healthy':
-                return <FaCheckCircle size={16} color={statusColors.success} />;
+                return <FaCheckCircle size={16} style={{ pointerEvents: 'none' }} color="#4caf50" />;
             case 'warning':
-                return <FaExclamationTriangle size={16} color={statusColors.warning} />;
+                return <FaExclamationTriangle size={16} style={{ pointerEvents: 'none' }} color="#ff9800" />;
             case 'error':
-                return <FaTimesCircle size={16} color={statusColors.error} />;
+                return <FaTimesCircle size={16} style={{ pointerEvents: 'none' }} color="#f44336" />;
             default:
                 return null;
         }
     };
 
-    // Generate detailed tooltip content
-    const getTooltipContent = () => (
-        <Box sx={{ 
-            p: 1,
-            minWidth: '200px',
-            bgcolor: 'background.paper',
-            borderRadius: 1
-        }}>
-            <Box sx={{ 
-                fontWeight: 'bold',
-                mb: 1,
-                pb: 0.5,
-                borderBottom: '1px solid',
-                borderColor: 'divider'
-            }}>
-                System Health Status
-            </Box>
-            {healthDetails.map((detail, index) => (
-                <Box key={index} sx={{ 
-                    mt: 0.5,
+    // Handle click outside
+    const handleClickOutside = (event) => {
+        if (event.target.getAttribute('data-overlay') === 'true') {
+            setIsOpen(false);
+        }
+    };
+
+    // Handle close button click
+    const handleClose = (event) => {
+        event.stopPropagation();
+        setIsOpen(false);
+    };
+
+    return (
+        <>
+            <Box 
+                role="button"
+                aria-label="System Health Status"
+                onClick={() => setIsOpen(true)}
+                sx={{ 
+                    cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 1
-                }}>
-                    {detail.status === 'healthy' ? (
-                        <FaCheckCircle size={12} color={statusColors.success} />
-                    ) : detail.status === 'warning' ? (
-                        <FaExclamationTriangle size={12} color={statusColors.warning} />
-                    ) : (
-                        <FaTimesCircle size={12} color={statusColors.error} />
-                    )}
-                    <Box sx={{ 
-                        display: 'flex',
-                        flexDirection: 'column'
-                    }}>
+                    justifyContent: 'center',
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '4px',
+                    border: '1px solid',
+                    borderColor: getStatus() === 'error' ? 'error.main' : 'divider',
+                    backgroundColor: 'background.paper',
+                    WebkitAppRegion: 'no-drag',
+                    position: 'relative',
+                    zIndex: 3,
+                    '& svg': {
+                        display: 'block',
+                        margin: 'auto',
+                        pointerEvents: 'none'
+                    },
+                    '&:hover': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                    },
+                    '&:active': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.1)'
+                    }
+                }}
+            >
+                {getIcon()}
+            </Box>
+
+            {isOpen && (
+                <Box
+                    onClick={handleClickOutside}
+                    data-overlay="true"
+                    sx={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'transparent',
+                        zIndex: 9998
+                    }}
+                >
+                    <Box
+                        onClick={(e) => e.stopPropagation()}
+                        sx={{
+                            position: 'fixed',
+                            top: '16px',
+                            right: '16px',
+                            maxWidth: '300px',
+                            zIndex: 9999,
+                            p: 2,
+                            borderRadius: 1,
+                            backgroundColor: 'background.paper',
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            boxShadow: 3
+                        }}
+                    >
+                        {/* Header */}
                         <Box sx={{ 
-                            fontSize: 'caption.fontSize',
-                            color: 'text.primary'
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 1,
+                            borderBottom: '1px solid',
+                            borderColor: 'divider',
+                            pb: 1,
+                            mb: 1
                         }}>
-                            {detail.name}: {detail.message}
-                        </Box>
-                        {detail.details && (
+                            {getIcon()}
                             <Box sx={{ 
-                                fontSize: 'caption.fontSize',
-                                color: 'text.secondary',
-                                mt: 0.5
+                                fontWeight: 'medium',
+                                fontSize: '0.7rem'
                             }}>
-                                {detail.details}
+                                System Health Status
+                            </Box>
+                            {/* Close button */}
+                            <Box
+                                onClick={handleClose}
+                                sx={{
+                                    ml: 'auto',
+                                    cursor: 'pointer',
+                                    color: 'text.secondary',
+                                    fontSize: '1rem',
+                                    lineHeight: 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '4px',
+                                    borderRadius: '4px',
+                                    '&:hover': {
+                                        color: 'error.main',
+                                        backgroundColor: 'action.hover'
+                                    }
+                                }}
+                            >
+                                ×
+                            </Box>
+                        </Box>
+
+                        {/* Status display */}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Box component="span" sx={{ 
+                                    color: healthData.database.status === 'healthy' ? '#4caf50' : '#f44336',
+                                    fontSize: '0.7rem'
+                                }}>●</Box>
+                                <Box sx={{ fontSize: '0.7rem' }}>
+                                    Database {healthData.database.status === 'healthy' ? 'Connected' : 'Disconnected'}
+                                </Box>
+                            </Box>
+                            
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Box component="span" sx={{ 
+                                    color: wsConnected ? '#4caf50' : '#f44336',
+                                    fontSize: '0.7rem'
+                                }}>●</Box>
+                                <Box sx={{ fontSize: '0.7rem' }}>
+                                    WebSocket {wsConnected ? 'Connected' : 'Disconnected'}
+                                </Box>
+                            </Box>
+                        </Box>
+
+                        {/* Error details if any */}
+                        {getStatus() === 'error' && healthData.database.message && (
+                            <Box sx={{ 
+                                mt: 2,
+                                pt: 2,
+                                borderTop: '1px solid',
+                                borderColor: 'divider',
+                                color: 'error.main',
+                                fontSize: '0.7rem'
+                            }}>
+                                Error Details: {healthData.database.message}
                             </Box>
                         )}
                     </Box>
                 </Box>
-            ))}
-        </Box>
-    );
-
-    return (
-        <Tooltip title={getTooltipContent()} arrow placement="bottom-end">
-            <Box sx={{
-                display: 'flex',
-                alignItems: 'center',
-                cursor: 'pointer',
-                p: 0.5,
-                borderRadius: 1,
-                '&:hover': {
-                    bgcolor: 'action.hover'
-                }
-            }}>
-                {getStatusIcon()}
-            </Box>
-        </Tooltip>
+            )}
+        </>
     );
 };
 

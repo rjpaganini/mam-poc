@@ -22,25 +22,62 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 class Config:
+    """Base configuration."""
+    
+    # Get the project root directory
+    PROJECT_ROOT = Path(__file__).parent.parent.parent
+    
+    # Database
+    SQLALCHEMY_DATABASE_URI = f"sqlite:///{PROJECT_ROOT}/data/merged.db"
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    
+    # Media storage
+    MEDIA_PATH = os.path.join(PROJECT_ROOT, 'media')
+    UPLOAD_FOLDER = os.path.join(MEDIA_PATH, 'uploads')
+    PROCESSED_FOLDER = os.path.join(MEDIA_PATH, 'processed')
+    
+    # Ensure directories exist
+    for path in [MEDIA_PATH, UPLOAD_FOLDER, PROCESSED_FOLDER]:
+        os.makedirs(path, exist_ok=True)
+    
+    # Flask
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
+    DEBUG = True
+    TESTING = False
+    
+    # WebSocket
+    CORS_ALLOWED_ORIGINS = "*"
+    
+    # Create data directory for database
+    DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+    os.makedirs(DATA_DIR, exist_ok=True)
+    
+    # Environment
+    ENV = os.getenv('FLASK_ENV', 'development')
+    DEBUG = os.getenv('FLASK_DEBUG', '1') == '1'
+    
     # Base paths
     BASE_DIR = Path(__file__).parent.parent
     DATA_DIR = Path(os.getenv('DATA_DIR', BASE_DIR.parent/'data')).resolve()
-    MEDIA_PATH = Path(os.getenv('MEDIA_PATH', BASE_DIR.parent/'media')).resolve()
+    MEDIA_PATH = Path(os.getenv('MEDIA_PATH', str(BASE_DIR.parent/'media'))).resolve()
     THUMBNAIL_DIR = DATA_DIR/'thumbnails'
     
-    # Database configuration
-    # Using merged.db - Enhanced schema with metadata, tags, and AI processing support
-    # Created: Feb 2024 - Combines normalized structure with rich feature support
-    SQLALCHEMY_DATABASE_URI = f'sqlite:///{DATA_DIR}/merged.db'
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-    
-    # API
+    # API and WebSocket
     API_PREFIX = '/api/v1'
-    HOST = '127.0.0.1'
-    PORT = 5001
+    HOST = os.getenv('HOST', '0.0.0.0')
+    PORT = int(os.getenv('API_PORT', '5001'))
+    
+    # WebSocket Configuration
+    WEBSOCKET_ENABLED = os.getenv('WEBSOCKET_ENABLED', 'true').lower() == 'true'
+    WEBSOCKET_PING_INTERVAL = int(os.getenv('WEBSOCKET_PING_INTERVAL', '25000'))
+    WEBSOCKET_PING_TIMEOUT = int(os.getenv('WEBSOCKET_PING_TIMEOUT', '5000'))
+    
+    # CORS Configuration
+    CORS_ENABLED = os.getenv('CORS_ENABLED', 'true').lower() == 'true'
+    CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:3001').split(',')
     
     # Media settings
-    ALLOWED_EXTENSIONS = {'.mp4', '.mov', '.avi'}  # Only video files
+    ALLOWED_EXTENSIONS = {'.mp4', '.mov', '.avi'}
     MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
     
     @classmethod
@@ -67,6 +104,35 @@ class Config:
         except Exception as e:
             logger.error(f"Failed to setup directories: {str(e)}")
             return False
+
+    @classmethod
+    def validate(cls) -> bool:
+        """Validate configuration settings"""
+        try:
+            # Validate paths
+            if not cls.MEDIA_PATH.exists():
+                raise ConfigurationError(f"Media path does not exist: {cls.MEDIA_PATH}")
+            
+            # Validate WebSocket settings
+            if cls.WEBSOCKET_ENABLED:
+                if cls.WEBSOCKET_PING_INTERVAL <= 0:
+                    raise ConfigurationError("Invalid WebSocket ping interval")
+                if cls.WEBSOCKET_PING_TIMEOUT <= 0:
+                    raise ConfigurationError("Invalid WebSocket ping timeout")
+            
+            # Validate CORS settings
+            if cls.CORS_ENABLED and not cls.CORS_ORIGINS:
+                raise ConfigurationError("CORS enabled but no origins specified")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Configuration validation failed: {str(e)}")
+            return False
+
+class TestConfig(Config):
+    """Testing configuration."""
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
 
 class ConfigurationError(Exception):
     """Raised when configuration validation fails"""

@@ -19,7 +19,7 @@ Dependencies:
 - opencv-python
 
 Author: AI Assistant
-Date: February 2024
+Date: February 12, 2025
 """
 
 import numpy as np
@@ -36,16 +36,17 @@ class SceneProcessor(BaseProcessor):
     Processor for detecting and analyzing scenes in commercial videos.
     
     This processor is optimized for short-form content, particularly
-    30 and 60 second commercials. It uses content-aware scene detection
-    with parameters tuned for commercial-style editing.
+    commercials with fast cuts and transitions. It uses content-aware 
+    scene detection with parameters tuned for commercial editing.
     
     Attributes:
         threshold (float): Detection threshold (default: 27.0)
-        min_scene_length (float): Minimum scene length in seconds (default: 0.5)
-        max_scenes (int): Maximum number of scenes to detect (default: 30)
+        min_scene_length (float): Minimum scene length in seconds (default: 0.2)
+        frame_window (int): Analysis window in frames (default: 2)
+        min_scene_frames (int): Minimum frames for a scene (default: 3)
     """
     
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Dict[str, Any] = {}):
         """
         Initialize the scene detection processor.
         
@@ -53,18 +54,21 @@ class SceneProcessor(BaseProcessor):
             config (Dict[str, Any], optional): Configuration parameters
                 - threshold: Detection sensitivity (20-30 recommended)
                 - min_scene_length: Minimum scene duration in seconds
-                - max_scenes: Maximum number of scenes to detect
+                - frame_window: Number of frames to analyze for transitions
+                - min_scene_frames: Minimum number of frames for a scene
         """
         super().__init__("SceneProcessor", config)
         
         # Set default configuration
         self.threshold = self.config.get('threshold', 27.0)
-        self.min_scene_length = self.config.get('min_scene_length', 0.5)
-        self.max_scenes = self.config.get('max_scenes', 30)
+        self.min_scene_length = self.config.get('min_scene_length', 0.2)  # 200ms for fast cuts
+        self.frame_window = self.config.get('frame_window', 2)  # Analyze pairs of frames
+        self.min_scene_frames = self.config.get('min_scene_frames', 3)  # Minimum 3 frames
         
         self.logger.info(
             f"Initialized SceneProcessor with threshold={self.threshold}, "
-            f"min_scene_length={self.min_scene_length}s"
+            f"min_scene_length={self.min_scene_length}s, "
+            f"min_frames={self.min_scene_frames}"
         )
     
     async def process(
@@ -132,7 +136,7 @@ class SceneProcessor(BaseProcessor):
                         last_frame = frame
                     
                     # Stop if we've found enough scenes
-                    if len(scenes) >= self.max_scenes:
+                    if len(scenes) >= self.min_scene_frames:
                         break
                     
             finally:
@@ -180,5 +184,53 @@ class SceneProcessor(BaseProcessor):
             self.threshold = new_config['threshold']
         if 'min_scene_length' in new_config:
             self.min_scene_length = new_config['min_scene_length']
-        if 'max_scenes' in new_config:
-            self.max_scenes = new_config['max_scenes'] 
+        if 'frame_window' in new_config:
+            self.frame_window = new_config['frame_window']
+        if 'min_scene_frames' in new_config:
+            self.min_scene_frames = new_config['min_scene_frames'] 
+
+    def _calculate_scene_similarity(self, frame1: np.ndarray, frame2: np.ndarray) -> float:
+        """
+        Calculate similarity between two frames using histogram comparison.
+        
+        Args:
+            frame1: First frame
+            frame2: Second frame
+            
+        Returns:
+            Similarity score (0-1, where 1 is identical)
+        """
+        # Convert to grayscale
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        
+        # Calculate histograms
+        hist1 = cv2.calcHist([gray1], [0], None, [256], [0, 256])
+        hist2 = cv2.calcHist([gray2], [0], None, [256], [0, 256])
+        
+        # Normalize histograms
+        cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        
+        # Compare histograms
+        similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+        return max(0, similarity)  # Ensure non-negative
+
+    def _find_similar_scene(self, current_frame: np.ndarray, scene_keyframes: List[Dict]) -> int:
+        """
+        Find if current frame matches any existing scene.
+        
+        Args:
+            current_frame: Frame to check
+            scene_keyframes: List of existing scene keyframes
+            
+        Returns:
+            Index of matching scene or -1 if no match
+        """
+        SIMILARITY_THRESHOLD = 0.95  # Adjust this threshold as needed
+        
+        for idx, scene in enumerate(scene_keyframes):
+            similarity = self._calculate_scene_similarity(current_frame, scene['frame'])
+            if similarity > SIMILARITY_THRESHOLD:
+                return idx
+        return -1 

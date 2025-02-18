@@ -1,145 +1,310 @@
 /**
- * AssetCard.js - Core media asset display
- * Optimized for minimal token usage
- * Sr Dev - 2024
+ * AssetCard.js
+ * Simple video preview with scrubbing for Electron
  */
 
-import React from 'react';
-import { Box, Typography, Skeleton } from '@mui/material';
+import React, { useState, useEffect } from 'react';
+import { Card, CardContent, CardMedia, Typography, IconButton } from '@mui/material';
 import { styled } from '@mui/material/styles';
+import { PlayArrow, Pause, Error } from '@mui/icons-material';
+import { formatDuration, formatFileSize, formatFPS } from '../../utils/formatters';
 import config from '../../config';
 
-// Styled components for performance
-const Card = styled(Box)({
+const StyledCard = styled(Card)(({ theme }) => ({
     position: 'relative',
-    width: '100%',
-    aspectRatio: '16/9',
-    bgcolor: 'background.paper',
-    borderRadius: 1,
-    overflow: 'hidden',
     cursor: 'pointer',
-    transition: 'transform 0.2s',
-    '&:hover': { transform: 'scale(1.02)' }
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    transition: 'transform 0.2s ease-in-out',
+    '&:hover': {
+        transform: 'scale(1.02)'
+    }
+}));
+
+const MediaContainer = styled('div')({
+    position: 'relative',
+    paddingTop: '56.25%', // 16:9 aspect ratio
+    backgroundColor: '#000',
+    flex: '1 1 auto' // Allow flex growing
 });
 
-const Thumb = styled('img')({
+const StyledVideo = styled('video')({
     position: 'absolute',
     top: 0,
     left: 0,
     width: '100%',
     height: '100%',
-    objectFit: 'cover'
+    objectFit: 'contain',
+    cursor: 'pointer'
 });
 
-const Info = styled(Box)({
+const StyledCardMedia = styled(CardMedia)({
     position: 'absolute',
-    bottom: 0,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain'
+});
+
+const PlayButton = styled(IconButton)(({ theme }) => ({
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    color: '#fff',
+    '&:hover': {
+        backgroundColor: 'rgba(0, 0, 0, 0.8)'
+    }
+}));
+
+const ErrorOverlay = styled('div')(({ theme }) => ({
+    position: 'absolute',
+    top: 0,
     left: 0,
     right: 0,
-    p: 1,
-    background: 'rgba(0,0,0,0.7)',
-    color: '#fff'
-});
+    bottom: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    color: theme.palette.error.main
+}));
 
-// Error boundary - minimal implementation
-class ErrBound extends React.Component {
-    state = { err: null };
-    
-    static getDerivedStateFromError(err) {
-        return { err };
-    }
-    
-    render() {
-        return this.state.err ? (
-            <Card>
-                <Typography color="error" p={1}>
-                    Failed to load asset
-                </Typography>
-            </Card>
-        ) : this.props.children;
-    }
-}
+const StyledCardContent = styled(CardContent)(({ theme }) => ({
+    padding: theme.spacing(0.5),
+    paddingBottom: `${theme.spacing(0.5)} !important`,
+    backgroundColor: theme.palette.background.paper,
+    borderTop: `1px solid ${theme.palette.divider}`,
+    flex: '0 0 auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.25)
+}));
 
-// Core component with minimal props
+const MetadataGrid = styled('div')(({ theme }) => ({
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 1fr)', // Two columns
+    gap: theme.spacing(0.25), // Tighter gap
+    fontSize: '0.6rem' // Set base font size for all children
+}));
+
 const AssetCard = ({ asset, onClick }) => {
-    const [loading, setLoading] = React.useState(true);
-    const [error, setError] = React.useState(false);
-    
-    // Get thumbnail URL from metadata
-    const thumbnailUrl = React.useMemo(() => {
-        if (!asset?.thumbnail_url) return null;
-        return `${config.api.baseURL}${asset.thumbnail_url}`;
-    }, [asset]);
-    
-    const getMeta = React.useMemo(() => {
-        const { format, file_size_mb, duration_formatted } = asset;
-        return {
-            type: format?.toUpperCase() || 'UNKNOWN',
-            size: `${file_size_mb}MB`,
-            duration: duration_formatted || '00:00'
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [hasError, setHasError] = useState(false);
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [isMouseOver, setIsMouseOver] = useState(false);
+    const videoRef = React.useRef(null);
+    const playTimeoutRef = React.useRef(null);
+
+    // Construct proper URLs
+    const thumbnailUrl = `http://localhost:5001/api/v1/thumbnails/${asset.id}.jpg`;
+    const previewUrl = asset.file_path ? `video://${encodeURIComponent(asset.file_path)}` : '';
+
+    // Cleanup function
+    useEffect(() => {
+        return () => {
+            if (playTimeoutRef.current) {
+                clearTimeout(playTimeoutRef.current);
+            }
         };
-    }, [asset]);
-    
-    // Event handlers
-    const handleClick = React.useCallback(() => {
-        onClick?.(asset);
-    }, [asset, onClick]);
-    
-    const handleLoad = React.useCallback(() => {
-        setLoading(false);
-        setError(false);
     }, []);
-    
-    const handleError = React.useCallback(() => {
-        setLoading(false);
-        setError(true);
-    }, []);
-    
+
+    const handleMouseEnter = () => {
+        setIsMouseOver(true);
+        if (!hasError && videoRef.current && isLoaded) {
+            // Restore video source first
+            if (!videoRef.current.getAttribute('src')) {
+                videoRef.current.setAttribute('src', previewUrl);
+                videoRef.current.load();
+            }
+            // Delay play slightly to avoid rapid play/pause on quick mouse movements
+            playTimeoutRef.current = setTimeout(() => {
+                videoRef.current.play().catch((error) => {
+                    if (error.name !== 'AbortError') {
+                        console.error('Failed to play video:', error, previewUrl);
+                        setHasError(true);
+                    }
+                });
+            }, 100);
+        }
+    };
+
+    const handleMouseLeave = () => {
+        setIsMouseOver(false);
+        if (playTimeoutRef.current) {
+            clearTimeout(playTimeoutRef.current);
+        }
+        if (!hasError && videoRef.current) {
+            videoRef.current.pause();
+            videoRef.current.removeAttribute('src');
+            videoRef.current.load();
+            setIsPlaying(false);
+        }
+    };
+
+    const handleLoadedMetadata = () => {
+        setIsLoaded(true);
+        if (isMouseOver && !hasError && videoRef.current) {
+            videoRef.current.play().catch(() => {});
+        }
+    };
+
+    // Add scrubbing functionality with improved validation
+    const handleMouseMove = (e) => {
+        if (!videoRef.current || hasError || !isLoaded) return;
+
+        try {
+            const video = videoRef.current;
+            const rect = e.currentTarget.getBoundingClientRect();
+            
+            // Ensure we have valid dimensions
+            if (rect.width <= 0) return;
+            
+            // Calculate x position with bounds
+            const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+            const percentage = x / rect.width;
+            
+            // Validate duration and calculate new time
+            const duration = video.duration;
+            if (typeof duration !== 'number' || !isFinite(duration) || duration <= 0) {
+                return;
+            }
+            
+            const newTime = percentage * duration;
+            
+            // Extra validation before setting time
+            if (typeof newTime === 'number' && 
+                isFinite(newTime) && 
+                newTime >= 0 && 
+                newTime <= duration) {
+                video.currentTime = newTime;
+            }
+        } catch (error) {
+            console.warn('Error during video scrubbing:', error);
+        }
+    };
+
+    const handleVideoError = () => {
+        console.error('Video error for:', previewUrl);
+        setHasError(true);
+        setIsPlaying(false);
+        setIsLoaded(false);
+    };
+
     return (
-        <ErrBound>
-            <Card onClick={handleClick}>
-                {loading && !error && (
-                    <Skeleton 
-                        variant="rectangular" 
-                        width="100%" 
-                        height="100%" 
-                        animation="wave"
-                    />
-                )}
+        <StyledCard 
+            onClick={onClick}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+        >
+            <MediaContainer onMouseMove={handleMouseMove}>
+                <StyledVideo
+                    ref={videoRef}
+                    src={previewUrl}
+                    poster={thumbnailUrl}
+                    preload="metadata"
+                    onLoadedMetadata={handleLoadedMetadata}
+                    onError={handleVideoError}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    muted
+                    playsInline
+                />
                 
-                {error && (
-                    <Box sx={{ 
-                        height: '100%', 
-                        display: 'flex', 
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        bgcolor: 'background.paper'
-                    }}>
-                        <Typography color="error" variant="caption">
-                            Thumbnail unavailable
-                        </Typography>
-                    </Box>
+                {hasError && (
+                    <ErrorOverlay>
+                        <Error sx={{ fontSize: 40 }} />
+                    </ErrorOverlay>
                 )}
+            </MediaContainer>
+
+            <StyledCardContent>
+                <Typography 
+                    variant="subtitle1" 
+                    noWrap 
+                    sx={{ 
+                        fontSize: '0.7rem', 
+                        fontWeight: 'medium',
+                        lineHeight: 1.2 // Tighter line height for title
+                    }}
+                >
+                    {asset.title}
+                </Typography>
                 
-                {thumbnailUrl && (
-                    <Thumb 
-                        src={thumbnailUrl}
-                        alt={asset.title || 'Media Asset'}
-                        onLoad={handleLoad}
-                        onError={handleError}
-                        loading="lazy"
-                        style={{ display: loading ? 'none' : 'block' }}
-                    />
-                )}
-                
-                <Info>
-                    <Typography variant="caption">
-                        {asset.title || 'Untitled'} • {getMeta.type} • {getMeta.size} • {getMeta.duration}
+                <MetadataGrid>
+                    <Typography 
+                        variant="caption" 
+                        sx={{ 
+                            fontSize: 'inherit',
+                            color: 'text.secondary',
+                            lineHeight: 1.2
+                        }}
+                    >
+                        Duration: {formatDuration(asset.duration)}
                     </Typography>
-                </Info>
-            </Card>
-        </ErrBound>
+                    <Typography 
+                        variant="caption" 
+                        sx={{ 
+                            fontSize: 'inherit',
+                            color: 'text.secondary',
+                            lineHeight: 1.2
+                        }}
+                    >
+                        Size: {formatFileSize(asset.file_size)}
+                    </Typography>
+                    <Typography 
+                        variant="caption" 
+                        sx={{ 
+                            fontSize: 'inherit',
+                            color: 'text.secondary',
+                            lineHeight: 1.2
+                        }}
+                    >
+                        Format: {asset.file_path?.split('.').pop()?.toUpperCase() || '-'}
+                    </Typography>
+                    {asset.fps && (
+                        <Typography 
+                            variant="caption" 
+                            sx={{ 
+                                fontSize: 'inherit',
+                                color: 'text.secondary',
+                                lineHeight: 1.2
+                            }}
+                        >
+                            FPS: {formatFPS(asset.fps)}
+                        </Typography>
+                    )}
+                    {asset.codec && (
+                        <Typography 
+                            variant="caption" 
+                            sx={{ 
+                                fontSize: 'inherit',
+                                color: 'text.secondary',
+                                lineHeight: 1.2
+                            }}
+                        >
+                            Codec: {asset.codec.toUpperCase()}
+                        </Typography>
+                    )}
+                    {asset.width && asset.height && (
+                        <Typography 
+                            variant="caption" 
+                            sx={{ 
+                                fontSize: 'inherit',
+                                color: 'text.secondary',
+                                lineHeight: 1.2
+                            }}
+                        >
+                            Resolution: {asset.width}×{asset.height}
+                        </Typography>
+                    )}
+                </MetadataGrid>
+            </StyledCardContent>
+        </StyledCard>
     );
 };
 
-export default React.memo(AssetCard); 
+export default AssetCard; 

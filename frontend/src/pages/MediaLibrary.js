@@ -17,8 +17,30 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Typography, CircularProgress, Button } from '@mui/material';
+import { styled } from '@mui/material/styles';
 import MediaGrid from '../components/MediaGrid';
 import config from '../config';
+import { colors } from '../theme/theme';  // Import colors from theme
+
+// Styled scan button with black background and red border
+const ScanButton = styled(Button)(({ theme }) => ({
+    height: '24px',
+    fontSize: '0.7rem',
+    padding: '0 12px',
+    backgroundColor: 'black',
+    color: colors.accent,
+    border: `1px solid ${colors.accent}`,
+    borderRadius: '2px',
+    textTransform: 'none',
+    '&:hover': {
+        backgroundColor: colors.accent,
+        color: 'black'
+    },
+    '&:active': {
+        backgroundColor: colors.accent,
+        color: 'black'
+    }
+}));
 
 // Core styled components with minimal token usage
 const Container = ({ children }) => (
@@ -131,9 +153,34 @@ const MediaLibrary = () => {
         };
     }, [fetchAssets]);
 
+    // Handle scan click
+    const handleScan = async () => {
+        try {
+            setState(s => ({ ...s, loading: true, error: null }));
+            const response = await fetch(`${config.api.baseURL}/scan`, {
+                method: 'POST'
+            });
+            if (!response.ok) throw new Error('Scan failed');
+            await fetchAssets(1);
+        } catch (error) {
+            setState(s => ({ 
+                ...s, 
+                error: `Failed to scan media: ${error.message}`,
+                loading: false 
+            }));
+        }
+    };
+
     return (
         <Container>
-            <Typography variant="h5" sx={{ mb: 3 }}>Media Library</Typography>
+            {/* Header with just title */}
+            <Box sx={{ 
+                mb: 3,
+                display: 'flex',
+                alignItems: 'center'
+            }}>
+                <Typography variant="h5">Media Library</Typography>
+            </Box>
             
             {state.error && (
                 <ErrorMessage 

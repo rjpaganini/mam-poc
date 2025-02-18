@@ -10,6 +10,7 @@ from flask import current_app
 from .database import db
 from .config import Config
 import os
+from typing import Any, Dict, Optional
 
 # Association table for many-to-many relationship between MediaAsset and Tag
 asset_tags = Table('asset_tags', db.metadata,
@@ -57,7 +58,7 @@ class Tag(db.Model):
     name = db.Column(db.String(50), unique=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    # Relationship with assets
+    # Relationship with assets - using back_populates
     assets = db.relationship('MediaAsset', secondary=asset_tags, back_populates='tags')
     
     @validates('name')
@@ -76,81 +77,74 @@ class Tag(db.Model):
         }
 
 class MediaAsset(db.Model):
-    """
-    Media asset model with enhanced metadata support.
-    Includes normalized columns for performance and rich metadata storage.
-    """
+    """Media asset model with enhanced metadata support"""
     __tablename__ = 'media_assets'
 
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(255), nullable=False)
     file_path = db.Column(db.String(1024), unique=True, nullable=False)
-    file_size = db.Column(db.BigInteger, nullable=False)
-    file_size_mb = db.Column(db.Float)  # Size in MB for display
-    format = db.Column(db.String(50))   # Container format (e.g., mp4)
-    
-    # Video metadata
-    duration = db.Column(db.Float)       # Duration in seconds
-    duration_formatted = db.Column(db.String(20))  # HH:MM:SS format
-    width = db.Column(db.Integer)        # Video width in pixels
-    height = db.Column(db.Integer)       # Video height in pixels
-    fps = db.Column(db.Float)           # Frames per second
-    codec = db.Column(db.String(50))     # Video codec (e.g., h264)
-    container_format = db.Column(db.String(50))  # Container format details
-    bit_rate = db.Column(db.Integer)    # Video bitrate
-    
-    # Audio metadata
-    audio_codec = db.Column(db.String(50))      # Audio codec (e.g., aac)
-    audio_channels = db.Column(db.Integer)      # Number of audio channels
-    audio_sample_rate = db.Column(db.Integer)   # Audio sample rate
-    
+    file_size = db.Column(db.BigInteger)
+    file_size_mb = db.Column(db.Float)
+    format = db.Column(db.String(32))
+    duration = db.Column(db.Float)
+    duration_formatted = db.Column(db.String(32))
+    width = db.Column(db.Integer)
+    height = db.Column(db.Integer)
+    fps = db.Column(db.Float)
+    codec = db.Column(db.String(32))
+    container_format = db.Column(db.String(32))
+    bit_rate = db.Column(db.Integer)
+    audio_codec = db.Column(db.String(32))
+    audio_channels = db.Column(db.Integer)
+    audio_sample_rate = db.Column(db.Integer)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    processing_results = db.relationship('ProcessingResult', back_populates='media_asset', lazy='dynamic')
-    tags = db.relationship('Tag', secondary=asset_tags, back_populates='assets', lazy='dynamic')
-    
-    @validates('file_path')
-    def validate_path(self, key, path):
-        """Validate file path exists and is video"""
-        path = Path(path)
-        if not path.exists():
-            raise ValueError(f"File not found: {path}")
-        if path.suffix.lower() not in Config.ALLOWED_EXTENSIONS:
-            raise ValueError(f"Invalid file type: {path.suffix}")
-        return str(path)
-    
-    @property
-    def thumbnail_path(self) -> str:
-        """Get thumbnail path for this asset"""
-        return str(Config.THUMBNAIL_DIR / f"{self.id}.jpg")
-    
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships - using back_populates to match Tag model
+    processing_results = db.relationship('ProcessingResult', backref='asset', lazy=True)
+    tags = db.relationship('Tag', secondary='asset_tags', back_populates='assets', lazy=True)
+
+    def __init__(self, **kwargs):
+        """Initialize with proper type conversion"""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
     def get_absolute_path(self) -> Path:
-        """
-        Resolve the relative file path to an absolute path using MEDIA_PATH.
-        
-        Returns:
-            Path: Absolute path to the media file
+        """Get absolute path to media file"""
+        # If the path is already absolute and exists, use it
+        path = Path(self.file_path)
+        if path.is_absolute() and path.exists():
+            return path
             
-        Example:
-            If file_path is 'media/video.mp4' and MEDIA_PATH is '/path/to/media',
-            returns '/path/to/media/video.mp4'
-        """
-        # Remove 'media/' prefix if present
-        relative_path = self.file_path.replace('media/', '', 1)
-        # Combine with MEDIA_PATH
-        return Path(Config.MEDIA_PATH) / relative_path
-    
-    def to_dict(self):
-        """Convert to API response format with enhanced metadata"""
+        # Otherwise, try relative to MEDIA_PATH
+        media_path = Path(Config.MEDIA_PATH)
+        # If the file_path starts with the media_path, make it relative
+        if str(path).startswith(str(media_path)):
+            path = Path(str(path).replace(str(media_path), '').lstrip('/'))
+        return media_path / path
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary with all fields"""
+        # Get the relative path for display
+        try:
+            media_path = Path(Config.MEDIA_PATH)
+            file_path = Path(self.file_path)
+            if file_path.is_absolute():
+                relative_path = str(file_path).replace(str(media_path), '').lstrip('/')
+            else:
+                relative_path = str(file_path)
+        except Exception:
+            relative_path = self.file_path
+
         return {
             'id': self.id,
             'title': self.title,
-            'file_path': self.file_path,
+            'file_path': relative_path,  # Use relative path for frontend
             'file_size': self.file_size,
             'file_size_mb': self.file_size_mb,
             'format': self.format,
-            'duration': self.duration,
+            'duration': float(self.duration) if self.duration else None,
             'duration_formatted': self.duration_formatted,
             'width': self.width,
             'height': self.height,
@@ -161,8 +155,8 @@ class MediaAsset(db.Model):
             'audio_codec': self.audio_codec,
             'audio_channels': self.audio_channels,
             'audio_sample_rate': self.audio_sample_rate,
-            'thumbnail_url': f'/thumbnails/{self.id}.jpg',
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
 
 @event.listens_for(MediaAsset, 'before_insert')
@@ -198,6 +192,10 @@ class ProcessingResult(db.Model):
     
     # Relationship with asset
     media_asset = db.relationship('MediaAsset', back_populates='processing_results')
+    
+    def __init__(self, **kwargs):
+        """Initialize with proper type conversion"""
+        super().__init__(**kwargs)
     
     def to_dict(self):
         """Convert to API-friendly format."""

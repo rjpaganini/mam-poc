@@ -1,7 +1,7 @@
 # Configuration Reference
 
-Version: 1.0.1
-Last Updated: February 10, 2025
+Version: 1.0.2
+Last Updated: February 13, 2025
 
 ## Environment Variables
 
@@ -26,16 +26,23 @@ FLASK_ENV=development
 # Memory Management
 THUMBNAIL_CACHE_SIZE=1024  # MB
 MEDIA_CACHE_SIZE=5120      # MB
+
+# Database
+SQLITE_DB_PATH=data/merged.db
 ```
 
 ### Frontend (.env)
 ```bash
 # Development Server
 PORT=3001
+ELECTRON_START_URL=http://localhost:3001
 
 # API Configuration
 REACT_APP_API_URL=http://localhost:5001/api/v1
 REACT_APP_WS_URL=ws://localhost:5001/ws
+
+# Electron Configuration
+ELECTRON_PROTOCOL=video
 ```
 
 ## Directory Structure
@@ -51,9 +58,12 @@ mam-poc/
 ├── frontend/         # React frontend
 │   ├── src/         # Source code
 │   ├── public/      # Static files
+│   ├── macos/       # Electron main process
 │   └── package.json
 ├── scripts/         # Utility scripts
-│   └── launch.sh    # Service management
+│   ├── core/       # Core management scripts
+│   ├── db/         # Database utilities
+│   └── maint/      # Maintenance tools
 ├── docs/           # Documentation
 ├── logs/           # Application logs
 └── data/           # Application data
@@ -65,7 +75,7 @@ mam-poc/
 
 ### Development Environment
 1. Enable debug mode for detailed logs
-2. Use local PostgreSQL instance
+2. Use local SQLite database
 3. Set reasonable cache sizes
 4. Enable CORS for development URLs
 
@@ -101,7 +111,7 @@ vim .env
 vim frontend/.env
 
 # Verify configuration
-./scripts/launch.sh verify-config
+./scripts/mam env check
 ```
 
 ### 2. Media Storage Setup
@@ -113,6 +123,9 @@ mkdir -p logs
 # Set permissions
 chmod -R 755 data
 chmod -R 755 logs
+
+# Verify paths
+./scripts/mam maint verify
 ```
 
 ### 3. Google Drive Setup
@@ -120,19 +133,20 @@ chmod -R 755 logs
 2. Mount Google Drive
 3. Update `CLOUD_STORAGE_PATH` in `.env`
 4. Enable cloud storage in configuration
+5. Verify media access with `./scripts/mam maint verify`
 
 ## Validation
 
 ### Check Configuration
 ```bash
 # Verify environment
-./scripts/launch.sh verify-config
+./scripts/mam env check
 
 # Test media access
-./scripts/launch.sh test-media
+./scripts/mam maint verify
 
-# Check storage paths
-./scripts/launch.sh check-paths
+# Check database
+./scripts/mam db verify
 ```
 
 ### Common Configuration Issues
@@ -140,8 +154,9 @@ chmod -R 755 logs
 2. Incorrect permissions
 3. Port conflicts
 4. WebSocket connection issues
+5. Database access errors
 
 ## Need Help?
-- Check logs in `/logs` directory
+- Check logs with `./scripts/mam logs`
 - Review [Troubleshooting Guide](../TROUBLESHOOTING.md)
 - Verify against example configurations 

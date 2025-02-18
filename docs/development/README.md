@@ -117,6 +117,43 @@ frontend/
 - Address all review comments
 - Ensure CI passes before merging
 
+### 4. Service Management
+- Use `launch.sh` for all service operations:
+  ```bash
+  # Start all services
+  ./scripts/launch.sh start
+
+  # Restart services (with health checks)
+  ./scripts/launch.sh restart
+
+  # Stop services
+  ./scripts/launch.sh stop
+
+  # Check service health
+  curl http://localhost:5001/api/v1/health/status
+  ```
+
+- Service Architecture:
+  - Backend API & WebSocket: Port 5001
+  - Frontend Dev Server: Port 3001
+  - Health checks ensure all components are running
+  - Automatic log rotation and management
+  - Graceful shutdown handling
+
+- Troubleshooting Services:
+  ```bash
+  # View service logs
+  tail -f logs/backend.log
+  tail -f logs/frontend.log
+
+  # Check port usage
+  lsof -i :5001
+  lsof -i :3001
+
+  # Force cleanup (if needed)
+  ./scripts/launch.sh force-stop
+  ```
+
 ## Best Practices
 
 ### WebSocket Communication

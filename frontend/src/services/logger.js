@@ -1,14 +1,17 @@
 /**
- * Enhanced logger with WebSocket support and file output
+ * Enhanced logger with WebSocket support and electron-log integration
  * Handles both development and production logging
  */
 
+// Check if electron-log is available through preload script
+const electronLog = window.electronLog;
+
 // Simple console logger that works without dependencies
 const consoleLogger = {
-    debug: console.debug.bind(console),
-    info: console.info.bind(console),
-    warn: console.warn.bind(console),
-    error: console.error.bind(console)
+    debug: electronLog?.debug || console.debug.bind(console),
+    info: electronLog?.info || console.info.bind(console),
+    warn: electronLog?.warn || console.warn.bind(console),
+    error: electronLog?.error || console.error.bind(console)
 };
 
 // Format log message with timestamp and level
@@ -28,7 +31,7 @@ const logger = {
         // Override logging methods to also send to WebSocket
         logger.debug = (message, ...args) => {
             const formattedMessage = formatLog('debug', message, ...args);
-            consoleLogger.debug(formattedMessage);
+            electronLog?.debug(formattedMessage) || consoleLogger.debug(formattedMessage);
             service?.send?.({ 
                 type: 'log', 
                 level: 'debug', 
@@ -38,7 +41,7 @@ const logger = {
 
         logger.info = (message, ...args) => {
             const formattedMessage = formatLog('info', message, ...args);
-            consoleLogger.info(formattedMessage);
+            electronLog?.info(formattedMessage) || consoleLogger.info(formattedMessage);
             service?.send?.({ 
                 type: 'log', 
                 level: 'info', 
@@ -48,7 +51,7 @@ const logger = {
 
         logger.warn = (message, ...args) => {
             const formattedMessage = formatLog('warn', message, ...args);
-            consoleLogger.warn(formattedMessage);
+            electronLog?.warn(formattedMessage) || consoleLogger.warn(formattedMessage);
             service?.send?.({ 
                 type: 'log', 
                 level: 'warn', 
@@ -58,7 +61,7 @@ const logger = {
 
         logger.error = (message, ...args) => {
             const formattedMessage = formatLog('error', message, ...args);
-            consoleLogger.error(formattedMessage);
+            electronLog?.error(formattedMessage) || consoleLogger.error(formattedMessage);
             service?.send?.({ 
                 type: 'log', 
                 level: 'error', 

@@ -1,7 +1,7 @@
 # Developer Onboarding Guide
 
-Version: 1.0.1
-Last Updated: February 10, 2025
+Version: 1.0.2
+Last Updated: February 13, 2025
 For: New developers joining the MAM project
 
 ## Welcome! 👋
@@ -16,7 +16,7 @@ This guide will help you get started with the Media Asset Manager (MAM) project.
 Python 3.12.1 or higher
 Node.js 18.19.0 or higher
 FFmpeg 6.1 or higher
-PostgreSQL 14.10 or higher
+SQLite 3.x
 Git
 ```
 
@@ -26,15 +26,8 @@ Git
 git clone <repository-url>
 cd mam-poc
 
-# Setup Python environment
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
-pip install -r requirements.txt
-
-# Setup Frontend
-cd frontend
-npm install
-cd ..
+# Initial setup
+./scripts/mam env setup
 ```
 
 ### 1.3 Configure Environment
@@ -45,7 +38,7 @@ cp .env.example .env
 # Edit .env with your settings
 # Key settings to change:
 MEDIA_ROOT=/path/to/your/media
-DATABASE_URL=postgresql://localhost/mam
+CLOUD_STORAGE_PATH=/path/to/google/drive
 ```
 
 ## 2. Key Files to Understand
@@ -65,19 +58,19 @@ backend/
 ```
 frontend/
 ├── src/
-│   ├── App.js                      # Main application
+│   ├── App.tsx                    # Main application
 │   ├── components/
-│   │   ├── MediaLibrary/          # Core media browser
-│   │   └── AssetDetails.js        # Asset viewer
+│   │   ├── MediaLibrary/         # Core media browser
+│   │   └── AssetDetails.tsx      # Asset viewer
 │   └── services/
-│       ├── api.js                 # API client
-│       └── socket.js              # WebSocket client
+│       ├── api.ts                # API client
+│       └── socket.ts             # WebSocket client
 ```
 
 ### 2.3 Configuration (Priority: Medium)
 ```
 ├── backend/app/config.py    # Backend configuration
-├── frontend/src/config.js   # Frontend configuration
+├── frontend/src/config.ts   # Frontend configuration
 └── .env                     # Environment variables
 ```
 
@@ -87,14 +80,19 @@ frontend/
 1. **Flask Backend**
    - RESTful API for media management
    - WebSocket server for real-time updates
-   - PostgreSQL database for metadata
+   - SQLite database for metadata
 
 2. **React Frontend**
    - Media browser interface
    - Real-time status updates
    - Asset viewer and processor
 
-3. **Services**
+3. **Electron App**
+   - Native desktop application
+   - Local file system access
+   - Media streaming capabilities
+
+4. **Services**
    - FFmpeg for media processing
    - WebSocket for real-time communication
    - File system for media storage
@@ -103,28 +101,29 @@ frontend/
 
 ### 4.1 Starting the Services
 ```bash
-# Start backend (Terminal 1)
-source venv/bin/activate
-python run.py
+# Start all services
+./scripts/mam start
 
-# Start frontend (Terminal 2)
-cd frontend
-npm start
+# Start individual services
+./scripts/mam start backend
+./scripts/mam start frontend
+./scripts/mam start electron
 ```
 
 ### 4.2 Common Development Tasks
 ```bash
-# Run backend tests
-python -m pytest
-
-# Run frontend tests
-cd frontend && npm test
-
-# Check API health
-curl http://localhost:5001/api/v1/health/status
+# Check service status
+./scripts/mam status
 
 # View logs
-tail -f logs/backend.log
+./scripts/mam logs
+
+# Run tests
+./scripts/mam test backend
+./scripts/mam test frontend
+
+# Check health
+./scripts/mam health
 ```
 
 ## 5. Key Documentation to Read (In Order)
@@ -140,7 +139,7 @@ tail -f logs/backend.log
 1. Add route in `backend/app/routes/media.py`
 2. Add tests in `backend/tests/`
 3. Update API documentation
-4. Add frontend service method in `frontend/src/services/api.js`
+4. Add frontend service method in `frontend/src/services/api.ts`
 
 ### 6.2 Adding a New Feature
 1. Create feature branch: `git checkout -b feature/name`
@@ -153,35 +152,40 @@ tail -f logs/backend.log
 ## 7. Debugging Tips
 
 ### 7.1 Backend Issues
-```python
-# Add debug logging
-import logging
-logging.debug("Debug info:", variable)
+```bash
+# Check backend status
+./scripts/mam status
 
-# Use debugger
-import pdb; pdb.set_trace()
+# View backend logs
+./scripts/mam logs backend
+
+# Check database
+./scripts/mam db verify
 ```
 
 ### 7.2 Frontend Issues
-```javascript
-// Console logging
-console.debug('Debug info:', data);
+```bash
+# Check frontend status
+./scripts/mam status
 
-// React DevTools
-// Chrome DevTools -> Components tab
+# View frontend logs
+./scripts/mam logs frontend
+
+# Restart frontend
+./scripts/mam restart frontend
 ```
 
 ### 7.3 Common Issues
-1. Port conflicts: Check `lsof -i :5001`
-2. Database connection: Check PostgreSQL service
-3. Media not loading: Verify file permissions
-4. WebSocket issues: Check CORS settings
+1. Service not starting: Use `./scripts/mam status`
+2. Database issues: Run `./scripts/mam db verify`
+3. Media not loading: Check `./scripts/mam maint verify`
+4. Environment issues: Run `./scripts/mam env check`
 
 ## 8. Best Practices
 
 ### 8.1 Code Style
 - Follow PEP 8 for Python
-- Use ESLint rules for JavaScript
+- Use ESLint rules for TypeScript/JavaScript
 - Write tests for new features
 - Document your code
 - Keep functions small and focused
@@ -196,10 +200,11 @@ console.debug('Debug info:', data);
 ## 9. Getting Help
 
 ### 9.1 When Stuck
-1. Check logs first
-2. Review [TROUBLESHOOTING.md](../TROUBLESHOOTING.md)
-3. Search existing issues
-4. Ask for help with:
+1. Check service status: `./scripts/mam status`
+2. View relevant logs: `./scripts/mam logs`
+3. Review [TROUBLESHOOTING.md](../TROUBLESHOOTING.md)
+4. Search existing issues
+5. Ask for help with:
    - What you're trying to do
    - What you've tried
    - Relevant logs

@@ -106,6 +106,7 @@ const AssetDetails = () => {
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState(null);
     const [videoUrl, setVideoUrl] = useState('');
+    const [isVideoLoading, setIsVideoLoading] = useState(true);
 
     // Define fetchAsset function at component level
     const fetchAsset = async () => {
@@ -163,11 +164,11 @@ const AssetDetails = () => {
         }
     }, [asset, state]);
 
-    // Get video URL through the API
+    // Get video URL through the media:// protocol
     const getVideoPath = (asset) => {
-        if (!asset?.id) return '';
-        // Use the API endpoint to stream the video
-        return `http://localhost:5001/api/v1/media/asset/${asset.id}`;
+        if (!asset?.file_path) return '';
+        // Use the media:// protocol to stream directly through Electron
+        return `media://${encodeURIComponent(asset.file_path)}`;
     };
 
     // Handle opening folder in Finder
@@ -194,11 +195,29 @@ const AssetDetails = () => {
         }
     };
 
-    // Simplified error handling
+    // Enhanced error handling with retry logic
     const handleVideoError = (event) => {
         const error = event.target.error;
+        const videoElement = event.target;
+        
         setVideoError(error);
-        logger.error('Video playback error:', error);
+        setIsVideoLoading(false);
+
+        // Enhanced error logging
+        console.error('Video playback error:', {
+            code: error?.code,
+            message: error?.message,
+            src: videoElement?.src,
+            readyState: videoElement?.readyState,
+            networkState: videoElement?.networkState,
+            error: videoElement?.error
+        });
+    };
+
+    // Handle video loaded metadata
+    const handleVideoLoaded = () => {
+        setIsVideoLoading(false);
+        setVideoError(null);
     };
 
     // Handle copy to clipboard with visual feedback
@@ -306,19 +325,20 @@ const AssetDetails = () => {
             });
         }
         
-        // 5. Video Codec
-        if (asset.codec) {
+        // 5. File Format
+        const fileExt = asset.file_path?.split('.').pop()?.toUpperCase();
+        if (fileExt) {
             displayItems.push({
-                label: 'Codec',
-                value: asset.codec.toUpperCase()
+                label: 'File Format',
+                value: fileExt
             });
         }
         
-        // 6. Container Format
-        if (asset.container_format) {
+        // 6. Video Codec
+        if (asset.codec) {
             displayItems.push({
-                label: 'Format',
-                value: asset.container_format.toUpperCase()
+                label: 'Video Codec',
+                value: asset.codec.toUpperCase()
             });
         }
         
@@ -341,11 +361,11 @@ const AssetDetails = () => {
         return displayItems;
     };
 
-    // Update file path formatting to only show from vallin_io onwards
+    // Update file path formatting to show only the relevant part of the path
     const formatFilePath = (path) => {
         if (!path) return '';
-        const vallinIndex = path.indexOf('vallin_io');
-        return vallinIndex !== -1 ? `.../${path.substring(vallinIndex)}` : path;
+        // Show only the path from 'My Drive' onwards
+        return `My Drive/Business/Valen Media/valn.io/exploration/valn.io/Data/Raw_Videos/${path}`;
     };
 
     // Base container style to ensure dark theme coverage and proper spacing
@@ -399,20 +419,16 @@ const AssetDetails = () => {
         const progress = getProcessingProgress(asset);
         const aiMetadata = asset?.media_metadata?.ai_metadata || {};
 
-        // Panel container with consistent padding and borders
         return (
-            <Box 
-                sx={{ 
-                    p: 2, 
-                    bgcolor: 'background.paper',
-                    borderRadius: 1,
-                    border: '1px solid',
-                    borderColor: 'divider',
-                    mb: 2,
-                    // Ensure content stays within bounds
-                    overflow: 'hidden'
-                }}
-            >
+            <Box sx={{ 
+                p: 2, 
+                bgcolor: 'background.paper',
+                borderRadius: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                mb: 2,
+                overflow: 'hidden'
+            }}>
                 {/* Title Section */}
                 <Box sx={{ 
                     display: 'flex', 
@@ -420,7 +436,6 @@ const AssetDetails = () => {
                     gap: 1,
                     mb: 2
                 }}>
-                    {/* Panel Title */}
                     <Typography 
                         variant="subtitle2" 
                         sx={{ 
@@ -432,13 +447,14 @@ const AssetDetails = () => {
                         AI Video Processing
                     </Typography>
 
-                    {/* Process Button - Only show if not started */}
-                    {status === 'Not Started' && (
+                    {/* Process Button - Only show if not started or if there was an error */}
+                    {(status === 'Not Started' || status === 'Failed') && (
                         <Button
                             variant="outlined"
                             size="small"
                             startIcon={<PlayArrow sx={{ fontSize: '0.8rem' }} />}
                             onClick={onStartProcessing}
+                            disabled={isProcessing}
                             sx={{ 
                                 alignSelf: 'flex-start',
                                 minWidth: 'auto',
@@ -454,8 +470,19 @@ const AssetDetails = () => {
                                 }
                             }}
                         >
-                            Process
+                            {isProcessing ? 'Starting...' : 'Process'}
                         </Button>
+                    )}
+
+                    {/* Error Display */}
+                    {error && (
+                        <Typography 
+                            variant="caption" 
+                            color="error"
+                            sx={{ fontSize: '0.6rem' }}
+                        >
+                            {error}
+                        </Typography>
                     )}
                 </Box>
                 
@@ -808,24 +835,159 @@ const AssetDetails = () => {
     const handleStartProcessing = async () => {
         try {
             setIsProcessing(true);
-            const response = await fetch(`${config.api.baseURL}/api/v1/assets/${asset.id}/process`, {
-                method: 'POST'
+            setError(null); // Clear any previous errors
+            
+            // Debug logging
+            console.log('Config baseURL:', config.api.baseURL);
+            console.log('Config process endpoint:', config.api.endpoints.process);
+            console.log('Asset ID:', asset.id);
+            
+            // Remove any duplicate /api/v1 from baseURL and construct URL using process endpoint
+            const baseUrl = config.api.baseURL.replace(/\/+$/, '');
+            const processPath = config.api.endpoints.process.replace(/^\/+/, '');
+            const processUrl = `${baseUrl}/${processPath}/${asset.id}`;
+            
+            console.log('Final process URL:', processUrl);
+            
+            const response = await fetch(processUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
             });
             
+            // Enhanced response logging
+            console.log('Response status:', response.status);
+            console.log('Response status text:', response.statusText);
+            
             if (!response.ok) {
-                throw new Error(`Failed to start processing: ${response.statusText}`);
+                const errorData = await response.json().catch(() => null);
+                console.error('Error data:', errorData);
+                throw new Error(`Processing failed: ${response.status} ${errorData ? JSON.stringify(errorData) : response.statusText}`);
             }
+            
+            const data = await response.json();
+            console.log('Processing initiated successfully:', data);
+            
+            // Show success message
+            setError(null);
             
             // Refresh asset data after a short delay
             setTimeout(() => {
+                console.log('Refreshing asset data...');
                 fetchAsset();
             }, 1000);
             
         } catch (error) {
-            logger.error('Failed to start processing:', error);
+            console.error('Failed to start processing:', error);
+            // Log the error properly
+            logger.error('AI Processing failed:', error, {
+                assetId: asset?.id,
+                path: window.location.pathname,
+                timestamp: new Date().toISOString()
+            });
+            // Show user feedback
+            setError('Failed to start processing. Please try again.');
         } finally {
             setIsProcessing(false);
         }
+    };
+
+    const ValidationPanel = ({ detections, onValidate }) => {
+        return (
+            <Box sx={{ mt: 3, p: 2, border: '1px solid', borderColor: 'divider' }}>
+                <Typography variant="h6" gutterBottom>
+                    Validation Interface
+                </Typography>
+                
+                {/* Scene Validation */}
+                <Box sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2">Scene Detection</Typography>
+                    {detections.scenes?.map((scene, index) => (
+                        <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+                            <Typography>
+                                Scene {index + 1}: {scene.start.toFixed(2)}s - {scene.end.toFixed(2)}s
+                            </Typography>
+                            <Button 
+                                size="small" 
+                                variant="outlined" 
+                                color="error"
+                                onClick={() => onValidate('scene', index, false)}
+                            >
+                                Invalid
+                            </Button>
+                            <Button 
+                                size="small" 
+                                variant="outlined" 
+                                color="success"
+                                onClick={() => onValidate('scene', index, true)}
+                            >
+                                Valid
+                            </Button>
+                        </Box>
+                    ))}
+                </Box>
+                
+                {/* Logo Validation */}
+                <Box sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2">Logo Detection</Typography>
+                    {detections.logos?.map((logo, index) => (
+                        <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+                            <Typography>
+                                Logo at {logo.timestamp.toFixed(2)}s 
+                                (Confidence: {(logo.confidence * 100).toFixed(1)}%)
+                            </Typography>
+                            <Button 
+                                size="small" 
+                                variant="outlined" 
+                                color="error"
+                                onClick={() => onValidate('logo', index, false)}
+                            >
+                                Invalid
+                            </Button>
+                            <Button 
+                                size="small" 
+                                variant="outlined" 
+                                color="success"
+                                onClick={() => onValidate('logo', index, true)}
+                            >
+                                Valid
+                            </Button>
+                        </Box>
+                    ))}
+                </Box>
+                
+                {/* Object Detection Validation */}
+                <Box sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2">Object Detection</Typography>
+                    {detections.objects?.map((obj, index) => (
+                        <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+                            <Typography>
+                                {obj.name} at {obj.timestamp.toFixed(2)}s 
+                                (Confidence: {obj.confidence.toFixed(1)}%)
+                            </Typography>
+                            <Button 
+                                size="small" 
+                                variant="outlined" 
+                                color="error"
+                                onClick={() => onValidate('object', index, false)}
+                            >
+                                Invalid
+                            </Button>
+                            <Button 
+                                size="small" 
+                                variant="outlined" 
+                                color="success"
+                                onClick={() => onValidate('object', index, true)}
+                            >
+                                Valid
+                            </Button>
+                        </Box>
+                    ))}
+                </Box>
+            </Box>
+        );
     };
 
     // Show loading state
@@ -936,27 +1098,56 @@ const AssetDetails = () => {
                             display: 'flex',
                             flexDirection: 'column'
                         }}>
-                            {videoError ? (
-                                <Box sx={{
-                                    p: 3,
-                                    color: 'error.main',
-                                    textAlign: 'center'
-                                }}>
-                                    Failed to load video: {videoError.message}
+                            <video
+                                key={asset.id} // Force remount on asset change
+                                controls
+                                style={{
+                                    width: '100%',
+                                    height: 'auto',
+                                    maxHeight: '70vh',
+                                    backgroundColor: '#000',
+                                    display: isVideoLoading ? 'none' : 'block'
+                                }}
+                                onError={handleVideoError}
+                                onLoadedMetadata={handleVideoLoaded}
+                                onLoadedData={handleVideoLoaded}
+                                src={getVideoPath(asset)}
+                                playsInline
+                                preload="metadata"
+                                crossOrigin="anonymous"
+                            />
+                            {isVideoLoading && (
+                                <Box 
+                                    display="flex" 
+                                    justifyContent="center" 
+                                    alignItems="center"
+                                    height="50vh"
+                                >
+                                    <CircularProgress />
                                 </Box>
-                            ) : (
-                                <video
-                                    controls
-                                    style={{
-                                        width: '100%',
-                                        height: 'auto',
-                                        maxHeight: '70vh',
-                                        backgroundColor: '#000'
-                                    }}
-                                    onError={handleVideoError}
-                                    src={getVideoPath(asset)}
-                                    playsInline
-                                />
+                            )}
+                            {videoError && (
+                                <Box 
+                                    display="flex" 
+                                    flexDirection="column"
+                                    justifyContent="center" 
+                                    alignItems="center"
+                                    height="50vh"
+                                    gap={2}
+                                >
+                                    <Typography color="error">
+                                        Failed to load video (Error {videoError.code})
+                                    </Typography>
+                                    <Button 
+                                        variant="contained" 
+                                        onClick={() => {
+                                            setIsVideoLoading(true);
+                                            setVideoError(null);
+                                        }}
+                                    >
+                                        Retry
+                                    </Button>
+                                </Box>
                             )}
                         </Box>
 
@@ -1063,15 +1254,16 @@ const AssetDetails = () => {
                                                 color: 'text.primary',
                                                 wordBreak: 'break-all',
                                                 pr: 3,
-                                                opacity: 0.85
+                                                opacity: 0.85,
+                                                whiteSpace: 'pre-wrap'  // Allow line breaks for long paths
                                             }}
                                         >
-                                            {asset.file_path}
+                                            {formatFilePath(asset.file_path)}
                                         </Typography>
 
                                         {/* Copy Button */}
                                         <Button
-                                            onClick={() => handleCopy(asset.file_path)}
+                                            onClick={() => handleCopy(formatFilePath(asset.file_path))}
                                             variant="text"
                                             size="small"
                                             color={copied ? "success" : "primary"}
@@ -1111,6 +1303,20 @@ const AssetDetails = () => {
                     padding: 2
                 }}>
                     <AIVisualizationPanel asset={asset} />
+                </Box>
+
+                <Box sx={{ 
+                    maxWidth: '1400px',
+                    margin: '0 auto',
+                    padding: 2
+                }}>
+                    <ValidationPanel 
+                        detections={asset?.media_metadata?.ai_metadata?.validation_results || {}} 
+                        onValidate={(type, index, isValid) => {
+                            // TODO: Implement validation logic
+                            console.log('Validation:', type, index, isValid);
+                        }} 
+                    />
                 </Box>
             </Box>
         </AssetDetailsErrorBoundary>

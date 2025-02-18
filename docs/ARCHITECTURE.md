@@ -1,279 +1,222 @@
-# MAM Technical Architecture
+# System Architecture
 
-## Core Components
+Version: 1.0.2
+Last Updated: February 13, 2025
 
-### 1. Media Asset Management
-```
-/api/v1/assets
-├── GET /                 # List assets with pagination and filters
-├── POST /               # Add new asset
-├── GET /<id>           # Get single asset
-└── DELETE /<id>        # Delete asset
-```
+## Overview
 
-**Critical Path Information:**
-- Media files are LOCAL files only, despite Google Drive path in config
-- Thumbnail generation happens asynchronously
-- File paths must be validated against allowed directories
-- All paths are stored relative to MEDIA_BASE_PATH
+The Media Asset Manager (MAM) is a desktop application built with:
+- Electron/React frontend
+- Flask/Python backend
+- SQLite database
+- FFmpeg for media processing
+- WebSocket for real-time updates
 
-**Common Pitfalls:**
-- Thumbnail URLs stored in media_metadata must not include API_PREFIX
-- Google Drive path is just a local directory, no cloud integration
-- File paths must use forward slashes, even on Windows
-- Always validate file existence before operations
+## System Components
 
-### 2. WebSocket System
-
-**Connection Flow:**
-```
-Client                              Server
-   │                                  │
-   ├─── Initial Connection ──────────>│
-   │                                  │
-   │<─── Connection Accepted ─────────┤
-   │                                  │
-   ├─── {"type": "ping"} ──────────>│ Every 25s
-   │                                  │
-   │<─── Processing Updates ──────────┤
-```
-
-**Key Points:**
-- WebSocket runs on same port as API (5001)
-- Heartbeat required every 25 seconds
-- Reconnection handled by client with exponential backoff
-- All messages must be valid JSON
-
-**Message Types:**
-```typescript
-interface WebSocketMessage {
-    type: 'processing_update' | 'ping' | 'connection';
-    data?: {
-        asset_id?: number;
-        progress?: number;
-        stage?: string;
-        status?: string;
-    };
-}
-```
-
-### 3. File System Structure
+### Frontend (Electron/React)
 
 ```
-mam-poc/
-├── backend/
-│   ├── app/
-│   │   ├── routes/          # API endpoints
-│   │   ├── utils/           # Utility functions
-│   │   ├── ai/             # Processing logic
-│   │   └── config.py       # Central config
-│   └── data/
-│       ├── thumbnails/     # Generated thumbnails
-│       └── mam.db         # SQLite database
-└── frontend/
-    └── src/
-        ├── services/       # API/WebSocket clients
-        └── components/     # React components
+frontend/
+├── src/
+│   ├── pages/           # Route components
+│   │   └── MediaLibrary.js
+│   ├── components/      # Reusable UI components
+│   │   └── MediaLibrary/
+│   │       ├── AssetCard.js
+│   │       ├── ListView.js
+│   │       └── ViewToggle.js
+│   ├── hooks/          # Custom React hooks
+│   ├── utils/          # Helper functions
+│   └── theme/          # UI theming
+├── macos/              # Electron main process
+└── tests/              # Frontend tests
 ```
 
-**Path Handling:**
-- All paths in config.py are absolute
-- All paths in code are relative to MEDIA_BASE_PATH
-- Thumbnail paths are relative to DATA_DIR/thumbnails
-- Database file is in DATA_DIR/mam.db
+Key Features:
+1. Custom video protocol for secure local file access
+2. Real-time updates via WebSocket
+3. Responsive grid/list views
+4. Thumbnail generation and caching
+5. Drag-and-drop interface
+6. System health monitoring
 
-### 4. API Response Structure
+### Backend (Flask/Python)
 
-**Asset Response:**
-```typescript
-interface Asset {
-    id: number;
-    title: string;
-    file_path: string;
-    mime_type: string;
-    file_size: number;
-    created_at: string;
-    updated_at: string;
-    media_metadata: {
-        width?: number;
-        height?: number;
-        duration?: number;
-        thumbnail_url?: string;  // Relative path: /thumbnails/xyz.jpg
-        codec?: string;
-        fps?: number;
-    };
-}
+```
+backend/
+├── app/
+│   ├── api/            # REST endpoints
+│   ├── models/         # Database models
+│   ├── services/       # Business logic
+│   └── utils/          # Helper functions
+├── tests/              # Backend tests
+└── scripts/            # Utility scripts
 ```
 
-**List Response:**
-```typescript
-interface ListResponse {
-    items: Asset[];
-    meta: {
-        page: number;
-        total: number;
-        pages: number;
-    };
-}
+Key Features:
+1. RESTful API
+2. WebSocket server
+3. Media processing queue
+4. File system operations
+5. Database management
+6. Health monitoring
+
+### Database Schema
+
+```sql
+-- Core Tables
+CREATE TABLE media_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    file_path TEXT NOT NULL UNIQUE,
+    file_size INTEGER,
+    file_size_mb FLOAT,
+    format TEXT,
+    duration FLOAT,
+    duration_formatted TEXT,
+    width INTEGER,
+    height INTEGER,
+    fps FLOAT,
+    codec TEXT,
+    container_format TEXT,
+    bit_rate INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes
+CREATE INDEX idx_media_assets_file_path ON media_assets(file_path);
+CREATE INDEX idx_media_assets_updated_at ON media_assets(updated_at);
 ```
 
-### 5. Error Handling
+## Data Flow
 
-**HTTP Status Codes:**
-- 400: Invalid request (bad file path, unsupported type)
-- 404: Asset/thumbnail not found
-- 500: Processing/server errors
-- 503: Service unavailable (health check failed)
-
-**Error Response:**
-```typescript
-interface ErrorResponse {
-    error: string;
-    timestamp: string;
-    context?: {
-        file_path?: string;
-        asset_id?: number;
-        stage?: string;
-    };
-}
+1. Media Discovery
+```mermaid
+graph LR
+    A[Media Directory] -->|Scan| B[Python Scanner]
+    B -->|Extract Metadata| C[FFmpeg]
+    C -->|Store| D[SQLite DB]
+    D -->|Notify| E[WebSocket]
+    E -->|Update UI| F[Frontend]
 ```
 
-### 6. Media Processing
-
-**Supported Types:**
-```python
-MEDIA_TYPES = {
-    'video': {'.mp4', '.mov', '.avi'},
-    'image': {'.jpg', '.png', '.gif'}
-}
+2. Media Streaming
+```mermaid
+graph LR
+    A[Frontend] -->|Request| B[Custom Protocol]
+    B -->|Validate| C[Backend API]
+    C -->|Stream| D[Media File]
+    D -->|Chunks| A
 ```
 
-**Processing Flow:**
-1. File added via API
-2. Metadata extracted
-3. Thumbnail generated asynchronously
-4. WebSocket updates sent to clients
-5. Database updated with metadata
-
-**Watch Out For:**
-- Large files can timeout during upload
-- Thumbnail generation can fail silently
-- Processing updates may be lost during reconnection
-- File permissions must allow read/write
-
-### 7. Configuration Management
-
-**Critical Settings:**
-```python
-Config.MEDIA_BASE_PATH    # Base path for all media files
-Config.DATA_DIR          # Location for thumbnails and DB
-Config.THUMBNAIL_DIR     # Must be under DATA_DIR
-Config.API_PREFIX       # Default: /api/v1
+3. Thumbnail Generation
+```mermaid
+graph LR
+    A[Media File] -->|Process| B[FFmpeg]
+    B -->|Generate| C[Thumbnail]
+    C -->|Cache| D[Disk Cache]
+    D -->|Serve| E[Frontend]
 ```
 
-**Environment Variables:**
-```bash
-FLASK_DEBUG=1           # Enable debug mode
-FLASK_ENV=development   # Environment type
-DATA_DIR=./data        # Data directory location
-MEDIA_PATH=./media     # Media files location
-```
+## Security
 
-### 8. Health Monitoring
+1. File Access
+- Custom video protocol
+- Path validation
+- API-routed access
+- No direct file system access from frontend
 
-**Health Check Endpoints:**
-```
-/api/v1/health/status      # Overall system health
-/api/v1/health/websocket   # WebSocket status
-/api/v1/health/processing  # Processing queue status
-```
+2. Data Validation
+- Input sanitization
+- Path normalization
+- Type checking
+- Rate limiting
 
-**Monitored Components:**
-- Database connectivity
-- WebSocket connections
-- Memory usage
-- Processing queue
-- File system access
+3. Error Handling
+- Graceful degradation
+- Detailed logging
+- User feedback
+- Recovery procedures
 
-### 9. Security Considerations
+## Performance
 
-**File Access:**
-- Validate all file paths
-- Check for directory traversal
-- Verify file permissions
-- Sanitize file names
+1. Caching
+- Thumbnail caching
+- Media metadata caching
+- Database query caching
+- Frontend state caching
 
-**API Security:**
-- CORS configured for frontend only
-- WebSocket validates origin
-- File paths are never exposed to client
-- Thumbnail access is rate-limited
+2. Optimization
+- Lazy loading
+- Virtual scrolling
+- Chunked streaming
+- Batch processing
+- Connection pooling
 
-### 10. Development Guidelines
+3. Resource Management
+- Process cleanup
+- Memory monitoring
+- Disk space checks
+- Connection limits
 
-**Best Practices:**
-- Always use Config class for settings
-- Handle WebSocket reconnection gracefully
-- Log all file operations
-- Validate paths before operations
-- Use type hints everywhere
-- Handle component dependencies properly
+## Deployment
 
-**Common Issues:**
-1. Thumbnail generation fails
-   - Check file permissions
-   - Verify THUMBNAIL_DIR exists
-   - Check disk space
-   - Look for ffmpeg errors
+1. Dependencies
+- Python 3.12.1
+- Node 18.19.0
+- FFmpeg 6.1
+- SQLite 3.45.0
 
-2. WebSocket disconnects
-   - Check heartbeat timing
-   - Verify no proxy interference
-   - Look for connection timeouts
-   - Check client reconnection logic
+2. Configuration
+- Environment variables
+- Config files
+- Logging setup
+- Path management
 
-3. File access errors
-   - Verify paths are absolute
-   - Check file permissions
-   - Validate file exists
-   - Handle path separators
+3. Monitoring
+- Health checks
+- Error tracking
+- Performance metrics
+- Resource usage
 
-4. Processing hangs
-   - Check memory usage
-   - Look for zombie processes
-   - Verify queue status
-   - Check disk space
+## Development
 
-## Quick Reference
+1. Tools
+- VSCode
+- SQLite Browser
+- FFmpeg
+- Chrome DevTools
 
-### Start Services:
-```bash
-# Start backend
-cd backend
-source .venv/bin/activate
-python wsgi.py
+2. Testing
+- Unit tests
+- Integration tests
+- End-to-end tests
+- Performance tests
 
-# Start frontend (new terminal)
-cd frontend
-npm start
-```
+3. Documentation
+- API docs
+- Architecture docs
+- Development guide
+- Troubleshooting guide
 
-### Verify Setup:
-```bash
-# Check health
-curl http://localhost:5001/api/v1/health/status
+## Future Improvements
 
-# Check WebSocket
-wscat -c ws://localhost:5001/ws
+1. Technical
+- Elasticsearch integration
+- Cloud sync support
+- Multi-user support
+- Plugin system
 
-# Check file access
-ls -l data/thumbnails
-ls -l "configured media path"
-```
+2. Features
+- Advanced search
+- Batch operations
+- Export/Import
+- Version control
 
-### Monitor Logs:
-```bash
-tail -f logs/app.log       # Application logs
-tail -f logs/error.log     # Error logs
-tail -f logs/system.log    # System logs
-``` 
+3. Performance
+- Distributed processing
+- Better caching
+- Optimized indexing
+- Parallel processing 

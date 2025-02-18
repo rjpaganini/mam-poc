@@ -6,7 +6,7 @@ Date: 2024
 """
 
 import asyncio
-from processing_manager import CloudProcessingManager
+from cloud.processing_manager import CloudProcessingManager
 import os
 import boto3
 

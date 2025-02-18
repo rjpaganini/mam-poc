@@ -1,18 +1,28 @@
+/*
+ * File: scripts.md
+ * Version: 1.0.4
+ * Last Updated: 2025-02-13 11:01 PST
+ * Author: Senior Developer
+ * Description: Documentation for MAM service management scripts
+ * Changes: 
+ * - Updated to reflect deprecation of manage_app.sh
+ * - Consolidated all operations under launch.sh
+ * - Added correct health check and scanning procedures
+ */
+
 # Shell Scripts Documentation
 
 ## Overview
 
-The MAM application uses a set of shell scripts for service management and development tasks. The scripts follow a hierarchical structure for clean separation of concerns:
+The MAM application uses shell scripts for service management and development tasks. The primary script is `launch.sh`, which handles all service operations:
 
 ```mermaid
 graph TD
-    A[launch.sh] -->|orchestrates| B[manage_services.sh]
-    B -->|manages| C[manage_app.sh]
-    C -->|configures| D[consolidate_venv.sh]
+    A[launch.sh] -->|manages| B[Backend Service]
+    A -->|manages| C[Frontend Service]
+    A -->|manages| D[Health Checks]
+    A -->|manages| E[Media Scanning]
     style A fill:#f9f,stroke:#333
-    style B fill:#bbf,stroke:#333
-    style C fill:#dfd,stroke:#333
-    style D fill:#fdd,stroke:#333
 ```
 
 ## Quick Reference
@@ -27,49 +37,25 @@ graph TD
 # Check service status
 ./launch.sh status
 
-# Scan media directory
-./manage_app.sh scan
-
 # Check system health
-./manage_app.sh health
+curl http://localhost:5001/api/v1/health/status
+
+# Scan media directory
+./launch.sh scan
 ```
 
 ## Script Details
 
-### launch.sh (v1.0.3)
-Entry point for service management
-- Validates Python 3.11
-- Sets up logging
-- Routes commands to service manager
-```bash
-Usage: ./launch.sh {start|stop|restart|status}
-```
-
-### manage_services.sh (v1.0.2)
-Service orchestration and monitoring
-- Manages virtual environment
-- Handles service lifecycle
+### launch.sh (v1.0.4)
+Primary script for all service operations
+- Validates Python 3.12+
+- Sets up logging with rotation
+- Manages all services
 - Performs health checks
-```bash
-Environment:
-BACKEND_PORT=5001  # Backend service port
-FRONTEND_PORT=3001 # Frontend service port
-```
-
-### manage_app.sh (v1.0.2)
-Development and maintenance tasks
-- Controls development environment
-- Manages processes
 - Handles media scanning
 ```bash
-Commands: start, stop, restart, scan, health
+Usage: ./launch.sh {start|stop|restart|status|scan}
 ```
-
-### consolidate_venv.sh (v1.0.2)
-Python environment management
-- Consolidates virtual environments
-- Installs dependencies
-- Creates symbolic links
 
 ## Process Management
 
@@ -120,7 +106,8 @@ Python environment management
 ### Log Files
 - `launcher.log`: Launch script logs
 - `services.log`: Service manager logs
-- `app_manager.log`: Application logs
+- `backend.log`: Backend application logs
+- `frontend.log`: Frontend application logs
 
 ## Best Practices
 

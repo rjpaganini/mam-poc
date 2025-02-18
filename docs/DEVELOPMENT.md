@@ -1,7 +1,7 @@
 # Development Guide
 
-Version: 1.0.1
-Last Updated: February 10, 2025
+Version: 1.0.2
+Last Updated: February 13, 2025
 Minimum Requirements: Python 3.12.1, Node 18.19.0
 
 ## Project Structure
@@ -13,8 +13,11 @@ mam-poc/
 │   └── scripts/          # Utility scripts
 ├── frontend/
 │   ├── src/              # React components
-│   ├── public/           # Static assets
+│   │   ├── pages/        # Route components
+│   │   └── components/   # Reusable components
+│   ├── macos/            # Electron main process
 │   └── tests/            # Frontend tests
+├── data/                 # Database and thumbnails
 └── scripts/              # Project scripts
 ```
 
@@ -40,11 +43,11 @@ def process_media(asset_id: int) -> dict:
     # Implementation
 ```
 
-### TypeScript (Frontend)
+### TypeScript/JavaScript (Frontend)
 - Use ESLint config
 - Max line length: 100
-- Use interfaces for types
 - Document components
+- Follow component hierarchy (pages -> components)
 
 Example:
 ```typescript
@@ -59,139 +62,78 @@ const Asset: React.FC<AssetProps> = ({ id, title, onSelect }) => {
 };
 ```
 
-## Common Scripts
+## Service Management
 
-### Backend
+### Starting Services
 ```bash
-# Run tests
-python -m pytest
+# Start all services
+./scripts/mam start
 
-# Type checking
-mypy backend/
+# Start specific services
+./scripts/mam start backend
+./scripts/mam start frontend
+./scripts/mam start electron
 
-# Format code
-black backend/
+# Stop services
+./scripts/mam stop
+
+# Restart services
+./scripts/mam restart
 ```
 
-### Frontend
+### Health and Status
 ```bash
-# Run tests
-npm test
+# Check service status
+./scripts/mam status
 
-# Type checking
-npm run typecheck
+# Detailed health check
+./scripts/mam health
 
-# Lint
-npm run lint
+# Environment check
+./scripts/mam env check
+```
+
+### Logs
+```bash
+# View all logs
+./scripts/mam logs
+
+# View specific logs
+./scripts/mam logs backend
+./scripts/mam logs frontend
+```
+
+### Database Management
+```bash
+# Initialize database
+./scripts/mam db init
+
+# Verify database
+./scripts/mam db verify
+
+# Create backup
+./scripts/mam db backup
+
+# Merge database
+./scripts/mam db merge <path>
+```
+
+### Maintenance
+```bash
+# Regenerate thumbnails
+./scripts/mam maint thumbnails
+
+# Check media durations
+./scripts/mam maint durations
+
+# Clean temporary files
+./scripts/mam maint cleanup
+
+# Verify media files
+./scripts/mam maint verify
 ```
 
 ## WebSocket Development
 
-### Connection Lifecycle
-1. Initial connection
-2. Authentication
-3. Subscribe to events
-4. Handle messages
-5. Reconnect on disconnect
-
-Example:
-```typescript
-const ws = new WebSocket('ws://localhost:5001/ws');
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  // Handle message
-};
-
-ws.onclose = () => {
-  // Implement reconnection logic
-};
+### Connection Setup
 ```
-
-## Common Issues
-
-### Port Conflicts
-```bash
-# Check ports in use
-lsof -i :5001
-lsof -i :3000
-
-# Kill process
-kill -9 <PID>
-```
-
-### Database
-```bash
-# Reset database
-python scripts/reset_db.py
-
-# Backup
-pg_dump mam > backup.sql
-```
-
-### Media Processing
-- Check FFmpeg installation
-- Verify file permissions
-- Monitor logs/backend.log
-
-## Testing
-
-### Backend Tests
-```bash
-# Run all tests
-python -m pytest
-
-# Run specific test
-python -m pytest tests/test_media.py
-
-# With coverage
-python -m pytest --cov=backend
-```
-
-### Frontend Tests
-```bash
-# Run all tests
-npm test
-
-# Run specific test
-npm test -- AssetList.test.tsx
-
-# With coverage
-npm test -- --coverage
-```
-
-## Debugging
-
-### Backend
-```python
-# Add logging
-import logging
-logging.debug("Processing asset:", asset_id)
-
-# Use debugger
-import pdb; pdb.set_trace()
-```
-
-### Frontend
-```typescript
-// Add console logging
-console.debug('Asset data:', asset);
-
-// Use React DevTools
-// Chrome DevTools -> Components tab
-```
-
-## Security Best Practices
-1. Validate all inputs
-2. Sanitize file paths
-3. Use prepared statements
-4. Implement rate limiting
-5. Log security events
-
-## Performance Tips
-1. Use connection pooling
-2. Cache thumbnails
-3. Implement pagination
-4. Optimize media streams
-5. Use WebSocket for real-time
-``` 

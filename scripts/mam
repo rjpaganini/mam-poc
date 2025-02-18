@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+# mam - Main entry point for MAM service management
+# Version: 1.0.0
+
+# Strict error handling
+set -euo pipefail
+
+# Get the absolute path of this script
+get_script_path() {
+    local source="${BASH_SOURCE[0]}"
+    while [ -h "$source" ]; do
+        local dir="$( cd -P "$( dirname "$source" )" && pwd )"
+        source="$(readlink "$source")"
+        [[ $source != /* ]] && source="$dir/$source"
+    done
+    local dir="$( cd -P "$( dirname "$source" )" && pwd )"
+    echo "$dir"
+}
+
+# Setup environment
+SCRIPT_PATH=$(get_script_path)
+export PROJECT_ROOT="$( cd "$SCRIPT_PATH/.." && pwd )"
+export PATH="$PROJECT_ROOT/scripts/core:$PATH"
+
+# Ensure we're in the project root
+cd "$PROJECT_ROOT"
+
+# Source the service manager
+SERVICE_MANAGER="$PROJECT_ROOT/scripts/core/service_manager.sh"
+if [ ! -x "$SERVICE_MANAGER" ]; then
+    chmod +x "$SERVICE_MANAGER"
+fi
+
+# Command line interface
+usage() {
+    echo "Usage: mam COMMAND [SERVICE]"
+    echo
+    echo "Commands:"
+    echo "  start   [service]  Start all services or specific service"
+    echo "  stop    [service]  Stop all services or specific service"
+    echo "  restart [service]  Restart all services or specific service"
+    echo "  status  [service]  Show status of all services or specific service"
+    echo
+    echo "Services:"
+    echo "  backend   Backend service"
+    echo "  frontend  Frontend service"
+    echo "  electron  Electron app"
+    echo
+    echo "Examples:"
+    echo "  mam start          # Start all services"
+    echo "  mam stop frontend  # Stop frontend service"
+    echo "  mam status        # Show status of all services"
+    exit 1
+}
+
+# Validate arguments
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+# Execute command
+case "$1" in
+    start|stop|restart|status)
+        exec "$SERVICE_MANAGER" "$@"
+        ;;
+    *)
+        echo "Error: Unknown command '$1'"
+        usage
+        ;;
+esac 

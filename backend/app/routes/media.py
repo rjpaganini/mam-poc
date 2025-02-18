@@ -23,25 +23,49 @@ import logging
 import os
 import re
 import mimetypes
+import requests
+from requests.exceptions import RequestException
 from pathlib import Path
 from ..utils.file_utils import file_reader, partial_file_reader
-from typing import Tuple, Any, Dict, Union, cast, Optional, List
+from typing import Tuple, Any, Dict, Union, cast, Optional, List, TypedDict, Literal
 from functools import wraps
 from sqlalchemy import and_, or_, join
 from ..config import Config
 from datetime import datetime
+from sqlalchemy.sql import text
 
 # Configure route-specific logger
 logger = logging.getLogger(__name__)
 
-# Custom error class
+# Type definitions for health check
+class HealthStatus(TypedDict):
+    status: str
+    message: Optional[str]
+    path: Optional[str]
+    connections: Optional[int]
+    protocols: Optional[List[str]]
+
 class APIError(Exception):
     """Base exception for API errors"""
-    def __init__(self, message: str, status_code: int = 500, details: dict = None):
+    def __init__(self, message: str, status_code: int = 500, details: Optional[Dict[str, Any]] = None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.details = details or {}
+
+# Type definitions
+class ProcessingResultData(TypedDict):
+    asset_id: int
+    processor_name: str
+    status: Literal['completed', 'failed', 'pending']
+    result_data: Dict[str, Any]
+
+class ErrorResponseDetails(TypedDict, total=False):
+    error: str
+    path: str
+    asset_id: Union[int, str]
+    file_path: str
+    details: Dict[str, Any]
 
 # Create blueprint with proper name
 api = Blueprint('media', __name__)
@@ -87,203 +111,192 @@ def add_cors_headers(response: Response) -> Response:
     })
     return response
 
-def error_response(message: str, status_code: int = 500, details: Optional[Dict[str, Any]] = None) -> Tuple[Response, int]:
+def error_response(message, status_code=500, details=None):
     """Create standardized error response"""
-    response = {
+    response_data = {
         'error': message,
         'timestamp': datetime.utcnow().isoformat()
     }
-    if details:
-        response['details'] = details
-    return jsonify(response), status_code
+    if details is not None:
+        response_data['details'] = details
+    return jsonify(response_data), status_code
 
 @api.route('/assets', methods=['GET'])
 @cross_origin()
 @handle_errors
-def get_assets() -> Tuple[Response, int]:
-    """Get all media assets with proper error handling"""
+def list_assets() -> Tuple[Response, int]:
+    """List all media assets"""
     try:
-        # Query all assets
         assets = MediaAsset.query.all()
-        
-        # Convert to list of dicts with error handling
-        asset_list: List[Dict[str, Any]] = []
-        for asset in assets:
-            try:
-                asset_dict = asset.to_dict()
-                if asset_dict:  # Ensure we have valid data
-                    asset_list.append(asset_dict)
-            except Exception as e:
-                logger.error(f"Error converting asset {asset.id} to dict: {e}")
-                continue
-        
-        # Always return a list, even if empty
-        return jsonify(asset_list), 200
-        
+        return jsonify([asset.to_dict() for asset in assets]), 200
     except Exception as e:
-        logger.error(f"Failed to fetch assets: {e}")
-        return error_response("Failed to fetch assets", details={"error": str(e)})
-
-@api.route('/media/asset/<int:asset_id>', methods=['GET'])
-@cross_origin()
-@handle_errors
-def serve_media(asset_id: int) -> Tuple[Response, int]:
-    """
-    Serve media file with proper error handling.
-    Resolves relative paths to absolute paths using MEDIA_PATH configuration.
-    """
-    try:
-        # Get asset or return 404
-        asset = MediaAsset.query.get(asset_id)
-        if not asset:
-            return error_response("Asset not found", 404, {"asset_id": asset_id})
-        
-        # Get absolute path
-        absolute_path = asset.get_absolute_path()
-        logger.debug(f"Serving media file: {absolute_path}")
-        
-        if not absolute_path.exists():
-            return error_response(
-                "Media file not found", 
-                404, 
-                {
-                    "asset_id": asset_id,
-                    "relative_path": asset.file_path,
-                    "absolute_path": str(absolute_path)
-                }
-            )
-        
-        # Serve file with proper mime type and return tuple
-        response = send_file(
-            str(absolute_path),
-            mimetype=mimetypes.guess_type(str(absolute_path))[0],
-            as_attachment=False,
-            max_age=3600  # Cache for 1 hour
-        )
-        return response, 200
-        
-    except Exception as e:
-        logger.error(f"Failed to serve media {asset_id}: {e}")
-        return error_response(
-            "Failed to serve media file",
-            500,
-            {"asset_id": asset_id, "error": str(e)}
-        )
-
-@api.route('/scan', methods=['POST'])
-@cross_origin()
-@handle_errors
-def scan_directory() -> Tuple[Response, int]:
-    """Scan media directory for new files"""
-    try:
-        media_dir = Path(current_app.config['MEDIA_PATH'])
-        if not media_dir.exists():
-            return error_response(
-                "Media directory not found",
-                404,
-                {"path": str(media_dir)}
-            )
-            
-        new_assets: List[Dict[str, Any]] = []
-        for ext in current_app.config['ALLOWED_EXTENSIONS']:
-            for file_path in media_dir.glob(f"**/*{ext}"):
-                try:
-                    # Skip if already in database
-                    if MediaAsset.query.filter_by(file_path=str(file_path)).first():
-                        continue
-                        
-                    # Extract metadata
-                    metadata = extract_metadata(file_path)
-                    if not metadata:
-                        logger.warning(f"No metadata extracted for {file_path}")
-                        continue
-                    
-                    # Create asset
-                    asset = MediaAsset(
-                        title=file_path.stem,
-                        file_path=str(file_path),
-                        file_size=metadata['file_size'],
-                        file_size_mb=metadata['file_size_mb'],
-                        format=metadata['format'],
-                        duration=metadata.get('duration'),
-                        duration_formatted=metadata.get('duration_formatted'),
-                        width=metadata.get('width'),
-                        height=metadata.get('height'),
-                        fps=metadata.get('fps'),
-                        codec=metadata.get('codec'),
-                        container_format=metadata.get('container_format'),
-                        bit_rate=metadata.get('bit_rate'),
-                        audio_codec=metadata.get('audio_codec'),
-                        audio_channels=metadata.get('audio_channels'),
-                        audio_sample_rate=metadata.get('audio_sample_rate')
-                    )
-                    
-                    db.session.add(asset)
-                    db.session.flush()  # Get asset ID
-                    
-                    # Record processing result
-                    result = ProcessingResult(
-                        asset_id=asset.id,
-                        processor_name='metadata_extractor',
-                        status='completed',
-                        result_data=metadata
-                    )
-                    db.session.add(result)
-                    
-                    new_assets.append(asset.to_dict())
-                    
-                except Exception as e:
-                    logger.error(f"Error processing {file_path}: {e}")
-                    continue
-        
-        if new_assets:
-            db.session.commit()
-            logger.info(f"Added {len(new_assets)} new assets")
-            
-        return jsonify({
-            'message': f'Added {len(new_assets)} new files',
-            'assets': new_assets
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Scan failed: {e}")
-        return error_response("Directory scan failed", details={"error": str(e)})
+        logger.error(f"Failed to list assets: {e}")
+        raise APIError("Failed to list assets", 500)
 
 @api.route('/assets/<int:asset_id>', methods=['GET'])
 @cross_origin()
 @handle_errors
 def get_asset(asset_id: int) -> Tuple[Response, int]:
-    """Get a single media asset"""
+    """Get single asset details"""
     try:
         asset = MediaAsset.query.get_or_404(asset_id)
         return jsonify(asset.to_dict()), 200
     except Exception as e:
-        logger.error(f"Failed to fetch asset {asset_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Failed to get asset {asset_id}: {e}")
+        raise APIError(f"Failed to get asset {asset_id}", 500)
 
-@api.route('/thumbnails/<path:filename>', methods=['GET'])
+@api.route('/assets/<int:asset_id>/stream')
 @cross_origin()
 @handle_errors
-def serve_thumbnail(filename: str) -> Tuple[Response, int]:
-    """Serve thumbnail files with proper headers."""
-    logger.info(f"Thumbnail request for: {filename}")
+def stream_asset(asset_id: int) -> Tuple[Response, int]:
+    """Stream media file"""
+    try:
+        asset = MediaAsset.query.get_or_404(asset_id)
+        return send_file(asset.file_path), 200
+    except Exception as e:
+        logger.error(f"Failed to stream asset {asset_id}: {e}")
+        raise APIError(f"Failed to stream asset {asset_id}", 500)
+
+@api.route('/thumbnails/<filename>', methods=['GET'])
+@cross_origin()
+def get_thumbnail(filename: str) -> Tuple[Response, int]:
+    """Get asset thumbnail"""
+    logger.info(f"Request started: GET /api/v1/thumbnails/{filename}")
     
-    # Use Config.THUMBNAIL_DIR instead of current_app.config
-    thumbnail_path = Config.THUMBNAIL_DIR / filename
-    
-    if not thumbnail_path.exists():
-        logger.error(f"Thumbnail not found: {thumbnail_path}")
-        response = jsonify({'error': 'Thumbnail not found'})
-        return add_cors_headers(response), 404
-    
-    response = send_file(
-        thumbnail_path,
-        mimetype='image/jpeg',
-        as_attachment=False,
-        max_age=3600  # Cache for 1 hour
-    )
-    return add_cors_headers(response), 200
+    try:
+        thumb_path = Config.THUMBNAIL_DIR / filename
+        if not thumb_path.exists():
+            logger.warning(f"Thumbnail not found: {filename}")
+            return jsonify({
+                'error': 'Thumbnail not found',
+                'details': {'filename': filename}
+            }), 404
+            
+        response = send_file(thumb_path)
+        logger.info(f"Request completed: GET /api/v1/thumbnails/{filename} - Status: 200")
+        return response, 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get thumbnail {filename}: {e}", exc_info=True)
+        return jsonify({
+            'error': 'Internal server error',
+            'details': {'message': str(e), 'filename': filename}
+        }), 500
+
+@api.route('/scan', methods=['POST'])
+@cross_origin()
+@handle_errors
+def scan_directory():
+    """Scan media directory and add new files"""
+    try:
+        media_dir = Path(Config.MEDIA_PATH)
+        if not media_dir.exists():
+            raise APIError("Media directory not found", 404)
+            
+        new_files = 0
+        for ext in Config.ALLOWED_EXTENSIONS:
+            for file_path in media_dir.glob(f"**/*{ext}"):
+                # Skip if already in database
+                if MediaAsset.query.filter_by(file_path=str(file_path)).first():
+                    continue
+                    
+                try:
+                    # Extract video metadata
+                    metadata = extract_metadata(file_path)
+                    
+                    # Create new asset
+                    asset = MediaAsset(
+                        title=file_path.stem,
+                        file_path=str(file_path),
+                        file_size=file_path.stat().st_size,
+                        duration=metadata.get('duration'),
+                        width=metadata.get('width'),
+                        height=metadata.get('height'),
+                        codec=metadata.get('codec')
+                    )
+                    db.session.add(asset)
+                    new_files += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {file_path}: {e}")
+                    continue
+        
+        if new_files > 0:
+            db.session.commit()
+            
+        return jsonify({
+            "message": f"Scan complete. Added {new_files} new files.",
+            "new_files": new_files
+        })
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to scan directory: {e}")
+        raise APIError("Failed to scan directory", 500)
+
+@api.route('/health/status')
+@cross_origin()
+def health_status() -> Tuple[Response, int]:
+    """Basic health check that doesn't require WebSocket"""
+    try:
+        # Check database connection
+        with db.engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+            
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.utcnow().isoformat(),
+            'database': {
+                'status': 'healthy',
+                'message': 'Connected to database',
+                'path': current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+            }
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 503
+
+@api.route('/assets/<int:asset_id>/process', methods=['POST'])
+@cross_origin()
+@handle_errors
+def start_processing(asset_id: int) -> Tuple[Response, int]:
+    """Start AI processing for a media asset"""
+    try:
+        # Get the asset
+        asset = MediaAsset.query.get_or_404(asset_id)
+        
+        # Create initial processing result
+        result = ProcessingResult(
+            asset_id=asset_id,
+            processor_name='ai_processor',
+            status='pending',
+            result_data=None
+        )
+        db.session.add(result)
+        db.session.commit()
+        
+        # Get processing manager and queue asset
+        if hasattr(current_app, 'processing_manager'):
+            current_app.processing_manager.queue_asset(asset_id)
+        else:
+            raise RuntimeError("Processing manager not initialized")
+        
+        return jsonify({
+            'status': 'processing',
+            'message': f'Processing started for asset {asset.title}',
+            'asset_id': asset_id
+        }), 202
+        
+    except Exception as e:
+        logger.error(f"Failed to start processing for asset {asset_id}: {e}")
+        return jsonify({
+            'error': 'Processing failed to start',
+            'details': str(e)
+        }), 500
 
 def register_media_routes(bp: Blueprint) -> None:
     """Register media routes with the main API blueprint"""

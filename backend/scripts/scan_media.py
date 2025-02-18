@@ -7,6 +7,7 @@ from backend.app.utils.extract_metadata import extract_metadata
 from backend.app.utils.thumbnail import ensure_thumbnail
 from backend.app.config import Config  # Import Config class
 import os
+from datetime import datetime
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -46,6 +47,8 @@ class MediaAsset(db.Model):
     container_format = db.Column(db.String(50))        # e.g., 'mov', 'mp4'
     bit_rate = db.Column(db.BigInteger)                # Bits per second
     thumbnail_path = db.Column(db.String(255))         # Relative path to thumbnail
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)  # Creation timestamp
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # Update timestamp
 
 # Scan media files
 with app.app_context():

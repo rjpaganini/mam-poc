@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { useNavigate } from 'react-router-dom';
 import AssetCard from './MediaLibrary/AssetCard';
 import config from '../config';
+import { useWebSocketService } from '../hooks/useWebSocketService';
+import logger from '../services/logger';
 
 const Grid = styled.div`
     display: grid;
@@ -34,10 +36,48 @@ const sortOptions = [
     { value: 'resolution', label: 'Resolution' }
 ];
 
-const MediaGrid = ({ assets }) => {
+const MediaGrid = ({ assets: initialAssets }) => {
     const navigate = useNavigate();
     const [sortBy, setSortBy] = useState('title');
     const [sortDirection, setSortDirection] = useState('asc');
+    const [assets, setAssets] = useState(initialAssets);
+
+    // Initialize WebSocket connection
+    const { isConnected } = useWebSocketService({
+        onMessage: (message) => {
+            try {
+                if (message.type === 'asset_update') {
+                    // Update the specific asset in the grid
+                    setAssets(currentAssets => {
+                        const updatedAssets = [...currentAssets];
+                        const index = updatedAssets.findIndex(a => a.id === message.asset.id);
+                        if (index !== -1) {
+                            // Ensure all required fields are present
+                            const updatedAsset = {
+                                ...updatedAssets[index],
+                                ...message.asset,
+                                duration: message.asset.duration || updatedAssets[index].duration,
+                                thumbnail_url: message.asset.thumbnail_url || updatedAssets[index].thumbnail_url
+                            };
+                            updatedAssets[index] = updatedAsset;
+                            logger.debug('Asset updated:', updatedAsset);
+                        }
+                        return updatedAssets;
+                    });
+                }
+            } catch (error) {
+                logger.error('Error processing WebSocket message:', error);
+            }
+        },
+        onError: (error) => {
+            logger.error('WebSocket error in MediaGrid:', error);
+        }
+    });
+
+    // Update assets when initialAssets changes
+    useEffect(() => {
+        setAssets(initialAssets);
+    }, [initialAssets]);
 
     // Sort assets based on current criteria
     const sortedAssets = [...assets].sort((a, b) => {

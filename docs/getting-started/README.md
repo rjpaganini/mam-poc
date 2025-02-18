@@ -1,47 +1,25 @@
-# Getting Started with MAM
+# Getting Started
 
-Version: 1.0.1
-Last Updated: February 10, 2025
+Version: 1.0.2
+Last Updated: February 13, 2025
 
-## Documentation Structure
+Welcome to the Media Asset Manager (MAM) project! This directory contains essential documentation to help you get started:
 
-This directory contains everything you need to get started with the Media Asset Manager (MAM). Here's how the documentation is organized:
+1. [Quick Reference](quick-reference.md) - Common commands and operations
+2. [Configuration Reference](configuration-reference.md) - Environment setup and configuration
+3. [Onboarding Guide](ONBOARDING.md) - Step-by-step guide for new developers
 
-### 1. [ONBOARDING.md](./ONBOARDING.md)
-- **Primary guide for new developers**
-- Complete walkthrough of the project
-- Where to start and what to learn first
-- Development workflow and best practices
+## Quick Start
 
-### 2. [quick-reference.md](./quick-reference.md)
-- Common commands and operations
-- Frequently used endpoints
-- Quick troubleshooting steps
-- Useful development tools
+```bash
+# 1. Setup environment
+./scripts/mam env setup
 
-### 3. [configuration-reference.md](./configuration-reference.md)
-- Detailed configuration options
-- Environment variables reference
-- Directory structure
-- Best practices for different environments
+# 2. Start services
+./scripts/mam start
 
-## Quick Links
+# 3. Check health
+./scripts/mam health
+```
 
-- 🚀 [Main Project README](../README.md)
-- 📚 [API Documentation](../api/README.md)
-- 🔧 [Troubleshooting Guide](../TROUBLESHOOTING.md)
-- 📖 [Development Guide](../DEVELOPMENT.md)
-
-## Getting Help
-
-1. Start with [ONBOARDING.md](./ONBOARDING.md)
-2. Check [Troubleshooting Guide](../TROUBLESHOOTING.md)
-3. Review logs in `/logs` directory
-4. Ask for help in the team channel
-
-## Next Steps
-
-After setting up:
-1. Review the [Architecture Overview](../ARCHITECTURE.md)
-2. Explore the [API Documentation](../api/README.md)
-3. Read the [Development Guidelines](../DEVELOPMENT.md) 
+For detailed instructions, see the [Onboarding Guide](ONBOARDING.md).

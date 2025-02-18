@@ -48,6 +48,9 @@ Current IAM user (`mam-processing`) needs:
 - `lambda:InvokeFunction`
 - `sqs:SendMessage`
 - `sqs:ReceiveMessage`
+- `rekognition:DetectLabels`
+- `rekognition:DetectFaces`
+- `rekognition:DetectText`
 
 ## Development Notes
 - Test video: `kohls_1.mp4` successfully processed

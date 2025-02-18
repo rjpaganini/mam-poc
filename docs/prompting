@@ -1,0 +1,98 @@
+check logs for any errors.
+check frontend and backend logs.
+ceh
+check the media library for any errors.
+check the media library for any missing thumbnails.
+check the media library for any missing videos.
+check the database for any errors.
+Monitor the Electron main process logs for video loading issues
+Check the backend logs for any API-related errors
+------------
+# Proceed like a Senior Developer //10x engineer
+
+# The fewer lines of code, the better
+
+ALWAYS LEAVE COMMENTS
+-------
+
+REMEMBER SIMPLE SIMPLE SIMPLE. THIS IS A PROOF OF CONCEPT. I just wanted to let you know that there is no need to overCOMPLICATE. DO NOT JUMP TO CONCLUSIONS.
+
+# Proceed like a Senior Developer //10x engineer
+# The fewer lines of code, the better
+#ALWAYS LEAVE COMMENTS
+
+kill and restart all services. do this sequentially and logically. 
+
+USE OUR MANAGED SERVICES SRCIPTS!
+
+look at all NEW logging structures and monitor health.
+
+
+proceed with making changes logically and sequentially like a Senior Developer //10x engineer
+ # DO NOT STOP UNTIL...
+
+you have made the updates and changes to the files and double-check your work. like a Senior Developer //10x engineer
+
+# reasoning paragraphs
+
+We have an error in
+Start by writing 3 paragraphs reasoning what the error might be. DO NOT JUMP TO CONCLUSIONS. quiet the ego. constantly question your assumptions.
+
+# objective 50/50
+
+BEFORE YOU ANSWER, i want you to write two detailed paragraphs, one arguing for each of these solutions - do not jump to conclusions, seriously consider both approaches
+
+then, after you finish, tell me whether one of these solutions is obviously better than the other, and why!
+
+# answer in short
+
+# DO NOT DELETE COMMENTS
+
+#summary of current state
+
+before we proceed, i need you to give me a summary of the current state of the project.
+
+format this as 3 concise paragraphs, where you describe what we just did, what did not work, which files were updated/created, what mistakes to avoid, any key insights/lessons we've learned, what problems/errors we are facing, ... and anything else a programmer might need to work productively on this project.
+
+write in a conversational yet informative tone, something like a README file on github that is super information dense and without any fluff or noise. DO NOT include any assumptions or theories, just the facts.
+
+i expect to see three concise paragraphs, written as if you were giving instructions to another programmer and this was ALL you could tell him.
+
+
+
+# one-paragraph search query
+let's perform a web search. your task is to write a one-paragraph search query, as if you were telling a human researcher that to find, including all the relevant context. format the paragraph as clear instructions, commanding a researcher to find what we're looking for. ask for code snippets or technical details when relevant
+
+# you should start the reasoning paragraph with lots of uncertainty, and slowly gain confidence as you think about the item more
+#give me the tl;dr of the search resultsbe careful though, often the search results contain dangerous and distracting red herrings"EXPLICIT TERMINAL RULES:
+
+- minimize the amount of terminal windows you need to open. 
+- look at what services are running and on what ports before you start new services
+- only start a new terminal window if you absolutely need to.
+- only start a new terminal window if you absolutely need to.
+- only start a new terminal window if you absolutely need to.
+look at what services are running and on what ports before you start new services
+look at what services are running and on what ports before you start new services
+
+look at what services are running and on what ports before you start new services
+***IMPORTANT***
+
+look at what services are running and on what ports before you start new services
+
+# Proceed like a Senior Developer //10x engineer
+
+PLEASE READ ALL DOCUMENTATION TO FAMILIARIZE YOURSELF WITH THE PROJECT DIRECTORY AND ALL FILES. ALL FILES. TAKEA. CAREFUL LOOK AT EACH FILE WITH A SENIOR DEVELOPER MIND. APPLY YOUR LOGICAL AND REASONING BEHIND WHY THE FILES EXISTS AND WHAT THEY'RE FUNCTION IS.
+
+
+IDENTIFY ANY ERRORS YOU SEE. IF YOU DO SEE ANY ERRORS OR DUPLICATION, Start by writing 3 paragraphs reasoning what the error might be. DO NOT JUMP TO CONCLUSIONS. quiet the ego. constantly question your assumptions.
+
+EFORE YOU ANSWER, i want you to write two detailed paragraphs, one arguing for each of these solutions - do not jump to conclusions, seriously consider both approaches
+
+then, after you finish, tell me whether one of these solutions is obviously better than the other, and why!
+
+
+-----
+KILL AND RESTART ALL SERVICES USING THE MANAGED SERVICES SCRIPTS WE'VE BUILT. LOOK IN THE PROJECT DIRECTORY. DO THIS SEQUENTIALLY AND LOGICALLY. 
+
+REMEMBER WE ARE USING ELECTRON, NOT A BROWSER. DO NOT JUMP TO ANY CONCLUSION. QUIET THE EGO. QUESTION YOUR ASSUMPTIONS. LOOK IN THE DIRECTORY. LAUNCH SERVICES AFTER BEING METHODICAL AND LOGICAL. PROCEED LIKE A SENIOR ENGINEER 
+-----

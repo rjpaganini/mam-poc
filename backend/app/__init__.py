@@ -1,61 +1,67 @@
 # __init__.py - Flask App Factory and Application Initialization
-# Purpose: Sets up and configures the Flask application using centralized configuration
 
 """
-Flask application factory and initialization.
-Handles application setup with proper configuration and error handling.
+Flask application factory with proper configuration and logging.
+Supports WebSocket for real-time updates.
 """
 
-from flask import Flask
-from flask_cors import CORS
-from .database import init_db, db
-from .config import Config
 import logging
 import os
 from pathlib import Path
+from datetime import datetime, UTC
 
-# Configure module-level logger
-logger = logging.getLogger(__name__)
+# Configure logger
+from . import logger
+app_logger = logger
 
-def create_app(config_class=None) -> Flask:
-    """Create and configure Flask application"""
+# Import socketio instance
+from .socket import socketio
+
+# Import database instance
+from .database import db
+
+def create_app(config_class=None):
+    """Create and configure the Flask application"""
+    # Import Flask and extensions here to ensure monkey patching is done first
+    from flask import Flask
+    from flask_cors import CORS
+    from .config import Config
+    
+    # Initialize Flask app
     app = Flask(__name__)
     
     # Load configuration
-    app.config.from_object(config_class or Config)
+    if config_class is None:
+        app.config.from_object('app.config.Config')
+    else:
+        app.config.from_object(config_class)
     
     # Initialize extensions
     CORS(app)
+    db.init_app(app)
+    socketio.init_app(app)
     
     # Ensure data directory exists
     data_dir = Path(app.config['DATA_DIR'])
     data_dir.mkdir(parents=True, exist_ok=True)
     
-    # Initialize database with proper context
-    db.init_app(app)
-    
     with app.app_context():
         # Ensure database tables exist
         db.create_all()
-        logger.info(f"Database initialized at {app.config['SQLALCHEMY_DATABASE_URI']}")
+        app_logger.info(f"Database initialized at {app.config['SQLALCHEMY_DATABASE_URI']}")
         
         # Initialize directories
         if not Config.setup_directories():
-            logger.error("Failed to setup required directories")
+            app_logger.error("Failed to setup required directories")
             raise RuntimeError("Directory setup failed")
         
-        # Initialize health monitoring
-        from .health import init_health
-        init_health(app)
-        logger.info("Health monitoring initialized")
-        
-        # Register core routes
-        from .routes import media
-        app.register_blueprint(media.api, url_prefix=app.config['API_PREFIX'])
+        # Register all routes
+        from .routes import register_routes
+        register_routes(app)
         
         # Log startup configuration
-        logger.info(f"Starting MAM server on {app.config['HOST']}:{app.config['PORT']}")
-        logger.info(f"Media directory: {app.config['MEDIA_PATH']}")
-        logger.info(f"Data directory: {app.config['DATA_DIR']}")
+        app_logger.info(f"Starting MAM server on {app.config['HOST']}:{app.config['PORT']}")
+        app_logger.info(f"Media directory: {app.config['MEDIA_PATH']}")
+        app_logger.info(f"Data directory: {app.config['DATA_DIR']}")
     
     return app

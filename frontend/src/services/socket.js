@@ -10,11 +10,11 @@ class SocketService {
         this.socket = null;
         this.listeners = new Map();
         this.options = {
-            path: config.api.ws.endpoint,  // Use configured Socket.IO path
+            path: '/socket.io',  // Use default Socket.IO path
             reconnection: true,
             reconnectionAttempts: config.api.ws.reconnectAttempts,
             reconnectionDelay: 1000,
-            transports: ['websocket'],
+            transports: ['websocket', 'polling'],  // Allow polling as fallback
             autoConnect: false
         };
     }

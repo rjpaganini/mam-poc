@@ -35,11 +35,11 @@ const spacing = {
  * Color palette
  * Use these values for all color references
  */
-const colors = {
+export const colors = {
     background: '#000000',
     surface: '#111111',
     border: '#222222',
-    hover: '#FF0000',
+    hover: '#660000',  // Brighter red for hover
     accent: '#FF0000',
     text: {
         primary: '#FFFFFF',
@@ -60,7 +60,8 @@ export const componentStyles = {
         border: `1px solid ${colors.border}`,
         borderRadius: '2px',
         '&:hover': {
-            borderColor: colors.hover
+            borderColor: colors.hover,
+            backgroundColor: colors.hover
         },
         '&.active': {
             borderColor: colors.accent
@@ -79,6 +80,9 @@ export const componentStyles = {
     }
 };
 
+// Define the base font family to be used throughout the app
+const baseFontFamily = '"Menlo", monospace';
+
 /**
  * Create the base theme
  * Extend with component-specific overrides
@@ -93,33 +97,129 @@ const theme = createTheme({
         text: colors.text,
         primary: {
             main: colors.accent
+        },
+        action: {
+            hover: colors.hover
         }
     },
     typography: {
-        fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+        fontFamily: baseFontFamily,
         fontSize: parseInt(fontSizes.md),
-        fontSizes // Make font sizes available in theme
+        fontSizes,
+        // Add specific typography variants
+        h1: { fontFamily: baseFontFamily },
+        h2: { fontFamily: baseFontFamily },
+        h3: { fontFamily: baseFontFamily },
+        h4: { fontFamily: baseFontFamily },
+        h5: { fontFamily: baseFontFamily },
+        h6: { fontFamily: baseFontFamily },
+        body1: { fontFamily: baseFontFamily },
+        body2: { fontFamily: baseFontFamily },
+        button: { 
+            fontFamily: baseFontFamily,
+            textTransform: 'none'
+        },
+        caption: { fontFamily: baseFontFamily },
+        overline: { fontFamily: baseFontFamily }
     },
     spacing: spacing.base,
     shape: {
         borderRadius: 2
     },
     components: {
+        MuiCssBaseline: {
+            styleOverrides: {
+                '@global': {
+                    '*': {
+                        fontFamily: baseFontFamily
+                    },
+                    body: {
+                        fontFamily: baseFontFamily
+                    }
+                }
+            }
+        },
         MuiButton: {
             styleOverrides: {
-                root: componentStyles.controls
+                root: {
+                    ...componentStyles.controls,
+                    fontFamily: baseFontFamily
+                }
             }
         },
         MuiInputBase: {
             styleOverrides: {
-                root: componentStyles.controls
+                root: {
+                    fontFamily: baseFontFamily
+                }
             }
         },
-        MuiCard: {
+        // Add hover styles for list items
+        MuiListItem: {
             styleOverrides: {
                 root: {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border
+                    '&:hover': {
+                        backgroundColor: colors.hover,
+                        '& *': { color: '#ffffff' }
+                    }
+                }
+            }
+        },
+        // Global input styles
+        MuiOutlinedInput: {
+            styleOverrides: {
+                root: {
+                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                        borderColor: `${colors.accent} !important`,
+                        borderWidth: '2px'
+                    },
+                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                        borderColor: colors.hover
+                    },
+                    // Override the default focus visible outline
+                    '&.Mui-focusVisible': {
+                        outline: 'none',
+                        '& .MuiOutlinedInput-notchedOutline': {
+                            borderColor: `${colors.accent} !important`,
+                            borderWidth: '2px'
+                        }
+                    }
+                }
+            }
+        },
+        // Global TextField styles
+        MuiTextField: {
+            styleOverrides: {
+                root: {
+                    '& .Mui-focused .MuiOutlinedInput-notchedOutline': {
+                        borderColor: `${colors.accent} !important`
+                    }
+                }
+            }
+        },
+        // Global input base styles
+        MuiInputBase: {
+            styleOverrides: {
+                root: {
+                    fontFamily: baseFontFamily,
+                    '&.Mui-focused': {
+                        '& .MuiOutlinedInput-notchedOutline': {
+                            borderColor: `${colors.accent} !important`
+                        }
+                    }
+                }
+            }
+        },
+        MuiSelect: {
+            styleOverrides: {
+                root: {
+                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                        borderColor: `${colors.accent} !important`,
+                        borderWidth: '2px'
+                    },
+                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                        borderColor: colors.hover
+                    }
                 }
             }
         }

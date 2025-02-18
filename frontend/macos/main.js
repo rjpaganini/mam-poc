@@ -1,67 +1,61 @@
 // macOS Native Entry Point
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, protocol, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const isDev = process.env.ELECTRON_START_URL != null || process.env.NODE_ENV === 'development';
+const log = require('electron-log');
 
-// Enhanced logging setup with rotation
-const LOG_PATH = path.join(app.getPath('userData'), 'logs');
-const MAIN_LOG = path.join(LOG_PATH, 'main.log');
-const RENDERER_LOG = path.join(LOG_PATH, 'renderer.log');
-const ERROR_LOG = path.join(LOG_PATH, 'error.log');
+// Configure electron-log
+log.initialize({ preload: true });
 
-// Ensure log directory exists
-if (!fs.existsSync(LOG_PATH)) {
-    fs.mkdirSync(LOG_PATH, { recursive: true });
-}
+// Update electron-log configuration
+log.transports.file.resolvePathFn = () => path.join(process.cwd(), 'logs', 'app', 'electron.log');
+log.transports.file.maxSize = 10 * 1024 * 1024; // 10MB
+log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}] [{level}] {text}';
+log.transports.file.level = process.env.NODE_ENV === 'development' ? 'debug' : 'info';
 
-// Rotate logs if they exceed 10MB
-const rotateLog = (logPath) => {
+// Rotate logs
+log.transports.file.sync = true;
+log.transports.file.getFile().clear();
+
+// Replace console.log with electron-log
+console.log = log.log;
+console.error = log.error;
+console.warn = log.warn;
+console.info = log.info;
+console.debug = log.debug;
+
+// Log startup information
+log.info('Starting application...');
+log.info(`Environment: ${isDev ? 'development' : 'production'}`);
+log.info(`User Data Path: ${app.getPath('userData')}`);
+
+// All logging will now go through electron-log to the main logs directory
+// No need for separate logging setup
+
+// Register IPC handlers
+ipcMain.handle('open-folder', async (event, filePath) => {
     try {
-        if (fs.existsSync(logPath) && fs.statSync(logPath).size > 10 * 1024 * 1024) {
-            fs.renameSync(logPath, `${logPath}.old`);
-        }
-    } catch (err) {
-        console.error(`Failed to rotate log ${logPath}:`, err);
+        // Show the file in Finder
+        shell.showItemInFolder(filePath);
+        log.info('Opening folder for file:', filePath);
+        return { success: true };
+    } catch (error) {
+        log.error('Failed to open folder:', error);
+        return { success: false, error: error.message };
     }
-};
-
-// Enhanced logger with rotation
-const logger = {
-    log: (...args) => {
-        rotateLog(MAIN_LOG);
-        const message = `[${new Date().toISOString()}] INFO: ${args.join(' ')}\n`;
-        fs.appendFileSync(MAIN_LOG, message);
-        console.log(message.trim());
-    },
-    error: (...args) => {
-        rotateLog(ERROR_LOG);
-        const message = `[${new Date().toISOString()}] ERROR: ${args.join(' ')}\n`;
-        fs.appendFileSync(ERROR_LOG, message);
-        console.error(message.trim());
-    }
-};
-
-// Capture uncaught exceptions
-process.on('uncaughtException', (error) => {
-    logger.error('Uncaught Exception:', error);
-});
-
-// Capture unhandled rejections
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 // Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
-    logger.log('Another instance is running. Quitting...');
+    log.info('Another instance is running. Quitting...');
     app.quit();
 } else {
     // Handle second instance launch
     app.on('second-instance', (event, commandLine, workingDirectory) => {
-        logger.log('Second instance detected, focusing main window');
+        log.info('Second instance detected, focusing main window');
         if (mainWindow) {
             if (mainWindow.isMinimized()) mainWindow.restore();
             mainWindow.focus();
@@ -107,29 +101,76 @@ if (!gotTheLock) {
         }
     }
 
-    function createWindow() {
+    // Add retry logic for development URL
+    async function waitForDevServer(url, maxRetries = 30) {
+        const http = require('http');
+        
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                await new Promise((resolve, reject) => {
+                    const request = http.get(url, (response) => {
+                        if (response.statusCode === 200) {
+                            resolve();
+                        } else {
+                            reject(new Error(`Status code: ${response.statusCode}`));
+                        }
+                    });
+                    request.on('error', reject);
+                    request.end();
+                });
+                log.info('Development server is ready');
+                return true;
+            } catch (error) {
+                log.info(`Waiting for development server... (${i + 1}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        return false;
+    }
+
+    async function createWindow() {
         if (mainWindow) {
             mainWindow.focus();
             return;
         }
 
-        console.log('Creating window in', isDev ? 'development' : 'production', 'mode');
+        log.info('Creating window in', isDev ? 'development' : 'production', 'mode');
+        
+        if (isDev) {
+            const devServerUrl = process.env.ELECTRON_START_URL || 'http://127.0.0.1:3001';
+            log.info('Waiting for development server at:', devServerUrl);
+            
+            const serverReady = await waitForDevServer(devServerUrl);
+            if (!serverReady) {
+                log.error('Development server not ready after timeout');
+                app.quit();
+                return;
+            }
+        }
         
         // Create the browser window with native macOS chrome
         mainWindow = new BrowserWindow({
             width: 1200,
             height: 800,
             webPreferences: {
-                nodeIntegration: true,
-                contextIsolation: false,
-                webSecurity: false,
-                // Enable native file system access
+                nodeIntegration: false,
+                contextIsolation: true,
+                sandbox: true,
+                preload: path.join(__dirname, 'preload.js'),
+                webSecurity: true,
                 webviewTag: true,
-                allowRunningInsecureContent: true,
-                // Add memory limits
+                allowRunningInsecureContent: false,
+                // Enable all available plugins and codecs
+                plugins: true,
                 additionalArguments: [
                     '--max-old-space-size=4096',
-                    '--max-heap-size=2048'
+                    '--max-heap-size=2048',
+                    '--ignore-gpu-blacklist',
+                    '--enable-gpu-rasterization',
+                    '--enable-native-gpu-memory-buffers',
+                    '--enable-accelerated-video-decode',
+                    '--enable-accelerated-video',
+                    '--force-video-overlays'
                 ]
             },
             // Enhanced macOS specific styling with proper window controls
@@ -142,6 +183,150 @@ if (!gotTheLock) {
             show: false,
             minWidth: 800,
             minHeight: 600
+        });
+
+        // Capture renderer process errors
+        mainWindow.webContents.on('render-process-gone', (event, details) => {
+            log.error('Renderer process gone:', details);
+        });
+
+        mainWindow.webContents.on('crashed', () => {
+            log.error('Renderer process crashed');
+        });
+
+        // Handle uncaught exceptions in the main process
+        process.on('uncaughtException', (error) => {
+            log.error('Uncaught Exception:', error);
+            dialog.showErrorBox('Error', `An error occurred: ${error.message}`);
+        });
+
+        // Handle unhandled promise rejections
+        process.on('unhandledRejection', (reason, promise) => {
+            log.error('Unhandled Rejection at:', promise, 'reason:', reason);
+        });
+
+        // Register protocols before anything else
+        protocol.registerFileProtocol('video', (request, callback) => {
+            try {
+                const videoPath = decodeURIComponent(request.url.replace('video://', ''));
+                // Remove the media/ prefix before joining with base path
+                const cleanPath = videoPath.replace('media/', '');
+                // Use cleanPath directly if it's absolute, otherwise join with MEDIA_PATH
+                const absolutePath = cleanPath.startsWith('/') 
+                    ? cleanPath 
+                    : path.join('/Users/rjpaganini/Library/CloudStorage/GoogleDrive-rjpaganini@gmail.com/My Drive/Business/Valen Media/valn.io/exploration/valn.io/Data/Raw_Videos', cleanPath);
+                
+                log.log('Video request:', JSON.stringify({
+                    url: request.url,
+                    decodedPath: videoPath,
+                    cleanPath,
+                    absolutePath,
+                    exists: fs.existsSync(absolutePath)
+                }, null, 2));
+                
+                if (!fs.existsSync(absolutePath)) {
+                    log.error('Video not found:', absolutePath);
+                    callback({ error: -6 }); // NET::ERR_FILE_NOT_FOUND
+                    return;
+                }
+
+                // Get file extension and set proper MIME type
+                const ext = path.extname(absolutePath).toLowerCase();
+                const additionalHeaders = {
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': 'no-cache, must-revalidate',
+                    'Access-Control-Allow-Origin': 'http://localhost:3001',
+                    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Range, Accept, Content-Type',
+                    'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+                    'Content-Disposition': 'inline; filename="video' + ext + '"'
+                };
+
+                // Treat both MP4 and MOV as MP4 containers since they contain H.264
+                let mimeType = 'video/mp4';
+                additionalHeaders['Content-Type'] = 'video/mp4';
+                if (ext === '.mov' || ext === '.mp4') {
+                    additionalHeaders['X-Content-Type-Options'] = 'nosniff';
+                }
+
+                // Get file stats for range requests
+                const stats = fs.statSync(absolutePath);
+                const range = request.headers?.Range;
+                
+                if (range) {
+                    const parts = range.replace(/bytes=/, '').split('-');
+                    const start = parseInt(parts[0], 10);
+                    const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+                    const chunksize = (end - start) + 1;
+                    
+                    additionalHeaders['Content-Range'] = `bytes ${start}-${end}/${stats.size}`;
+                    additionalHeaders['Content-Length'] = chunksize;
+                    additionalHeaders['Accept-Ranges'] = 'bytes';
+                } else {
+                    additionalHeaders['Content-Length'] = stats.size;
+                }
+
+                log.log('Video response:', JSON.stringify({
+                    path: absolutePath,
+                    mimeType,
+                    size: stats.size,
+                    extension: ext,
+                    headers: additionalHeaders,
+                    range: range || 'none'
+                }, null, 2));
+
+                callback({
+                    path: absolutePath,
+                    headers: additionalHeaders,
+                    mimeType: mimeType
+                });
+            } catch (error) {
+                log.error('Video protocol error:', error, {
+                    stack: error.stack,
+                    request: request.url
+                });
+                callback({ error: -2 });
+            }
+        });
+
+        // Set proper CSP headers with additional media types
+        mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+            callback({
+                responseHeaders: {
+                    ...details.responseHeaders,
+                    'Content-Security-Policy': [
+                        "default-src 'self' file: video: http://localhost:* http://127.0.0.1:*;",
+                        "connect-src 'self' file: video: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;",
+                        "script-src 'self' 'unsafe-inline' 'unsafe-eval';",
+                        "style-src 'self' 'unsafe-inline';",
+                        "img-src 'self' file: data: blob: http://localhost:* http://127.0.0.1:*;",
+                        "media-src 'self' file: video: quicktime: http://localhost:* http://127.0.0.1:* blob:;"
+                    ].join(' ')
+                }
+            });
+        });
+
+        // Register file protocol handler
+        protocol.registerFileProtocol('file', (request, callback) => {
+            try {
+                const filePath = decodeURIComponent(request.url.replace('file://', ''));
+                // Handle relative paths
+                const absolutePath = filePath.startsWith('/') 
+                    ? filePath 
+                    : path.join('/Users/rjpaganini/Library/CloudStorage/GoogleDrive-rjpaganini@gmail.com/My Drive/Business/Valen Media/valn.io/exploration/valn.io/Data/Raw_Videos', filePath);
+                
+                log.info('Attempting to load file:', absolutePath);
+                
+                if (fs.existsSync(absolutePath)) {
+                    callback({ path: absolutePath });
+                } else {
+                    log.error('File not found:', absolutePath);
+                    callback({ error: -6 }); // NET::ERR_FILE_NOT_FOUND
+                }
+            } catch (error) {
+                log.error('Error handling file protocol:', error);
+                callback({ error: -2 }); // NET::ERR_FAILED
+            }
         });
 
         // Disable HTTP cache for thumbnails completely
@@ -171,10 +356,10 @@ if (!gotTheLock) {
                 });
                 // Force reload the window
                 await mainWindow.webContents.reload();
-                logger.log('Cache cleared and window reloaded');
+                log.log('Cache cleared and window reloaded');
                 return { success: true };
             } catch (error) {
-                logger.error('Failed to clear cache:', error);
+                log.error('Failed to clear cache:', error);
                 return { success: false, error: error.message };
             }
         });
@@ -208,62 +393,42 @@ if (!gotTheLock) {
             }
         });
 
-        // Set CSP headers for both dev and prod
-        mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-            callback({
-                responseHeaders: {
-                    ...details.responseHeaders,
-                    'Content-Security-Policy': [
-                        "default-src 'self' http://localhost:* http://127.0.0.1:*;",
-                        "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;",
-                        "script-src 'self' 'unsafe-inline' 'unsafe-eval';",
-                        "style-src 'self' 'unsafe-inline';",
-                        "img-src 'self' data: blob: http://localhost:* http://127.0.0.1:*;",
-                        "media-src 'self' http://localhost:* http://127.0.0.1:* blob:;"
-                    ].join(' ')
-                }
-            });
-        });
-
-        // Register file protocol for media (in both dev and prod)
-        protocol.registerFileProtocol('file', (request, callback) => {
-            const filePath = decodeURI(request.url.replace('file://', ''));
-            callback({ path: filePath });
-        });
-
         // Load the app
-        const startUrl = isDev
-            ? process.env.ELECTRON_START_URL || 'http://localhost:3001'
-            : `file://${path.join(__dirname, '../build/index.html')}`;
-        
-        console.log('Loading URL:', startUrl);
-        
-        // Enhanced error handling for loadURL
-        mainWindow.loadURL(startUrl).catch(err => {
-            console.error('Failed to load URL:', err);
-            dialog.showErrorBox('Loading Error', 
-                `Failed to load application: ${err.message}\nURL: ${startUrl}`);
-        });
-
-        // Development tools
         if (isDev) {
+            const devServerUrl = process.env.ELECTRON_START_URL || 'http://127.0.0.1:3001';
+            log.info('Loading URL:', devServerUrl);
+            mainWindow.loadURL(devServerUrl);
             mainWindow.webContents.openDevTools();
-            console.log('DevTools opened');
+        } else {
+            log.info('Loading production build');
+            mainWindow.loadFile(path.join(__dirname, '../build/index.html'));
         }
 
         // Show window when ready
         mainWindow.once('ready-to-show', () => {
             mainWindow.show();
+            log.info('Window shown');
         });
 
         // Handle window being closed
         mainWindow.on('closed', () => {
             mainWindow = null;
+            log.info('Window closed');
         });
 
         // Handle text input context
         mainWindow.on('focus', () => {
             mainWindow.webContents.send('window-focused');
+        });
+
+        // Set security privileges for protocols
+        session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+            const url = webContents.getURL();
+            if (permission === 'media') {
+                callback(true);
+            } else {
+                callback(false);
+            }
         });
     }
 
@@ -306,13 +471,7 @@ if (!gotTheLock) {
 
     // App lifecycle
     app.whenReady().then(() => {
-        // Register file protocol
-        protocol.registerFileProtocol('file', (request, callback) => {
-            const filePath = request.url.replace('file://', '');
-            callback({ path: decodeURI(filePath) });
-        });
-
-        console.log('App ready, creating window...');
+        log.info('App ready, creating window...');
         createWindow();
         createTray();
     });
@@ -335,12 +494,12 @@ if (!gotTheLock) {
     const powerMonitor = require('electron').powerMonitor;
 
     powerMonitor.on('suspend', () => {
-        console.log('System going to sleep');
+        log.info('System going to sleep');
         // Save application state
     });
 
     powerMonitor.on('resume', () => {
-        console.log('System waking up');
+        log.info('System waking up');
         // Reconnect to services
         checkSystemHealth();
     });

@@ -31,7 +31,7 @@ python-dateutil==2.8.2  # Date utilities
 
 # WebSocket and Real-time
 Flask-SocketIO==5.3.6  # Socket.IO integration
-python-socketio==5.10.0  # Socket.IO implementation
+python-socketio==5.11.1  # Socket.IO implementation
 python-engineio==4.8.0  # Engine.IO implementation
 eventlet==0.35.2  # Async server
 

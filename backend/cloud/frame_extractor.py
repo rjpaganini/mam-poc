@@ -5,13 +5,13 @@ Frame Extraction Module for Cloud Processing
 ==========================================
 
 This module handles intelligent frame extraction from videos using OpenCV and PySceneDetect.
-It implements a hybrid approach:
+It implements a comprehensive approach:
 1. Content-aware scene detection for major changes
-2. Intelligent frame sampling within scenes
-3. Metadata extraction for each frame
+2. Full frame extraction (no sampling)
+3. Rich metadata extraction per frame
 
 Key Features:
-- Adaptive frame sampling based on scene complexity
+- Complete frame processing without sampling
 - Memory-efficient processing using generators
 - Rich metadata extraction per frame
 - Progress tracking and async support
@@ -24,24 +24,23 @@ import cv2
 import numpy as np
 from scenedetect import detect, ContentDetector
 from pathlib import Path
-from typing import Generator, Dict, Any
+from typing import Generator, Dict, Any, AsyncGenerator
 import asyncio
 import logging
 from datetime import timedelta
 
 class FrameExtractor:
     """
-    Intelligent frame extraction with scene detection.
-    Optimizes cloud processing by selecting the most relevant frames.
+    Complete frame extraction with scene detection.
+    Processes every frame for maximum accuracy.
     """
     
-    def __init__(self, sample_rate: int = 1):
+    def __init__(self, sample_rate: int = 30):
         """
-        Initialize frame extractor with configurable sampling.
+        Initialize frame extractor.
         Args:
-            sample_rate: Frames per second to extract (default: 1)
+            sample_rate: Default FPS, not used for sampling anymore
         """
-        self.sample_rate = sample_rate
         self.logger = logging.getLogger(__name__)
     
     async def extract_scenes(self, video_path: str) -> list:
@@ -65,9 +64,9 @@ class FrameExtractor:
             cap.release()
             return [(0, duration)]
     
-    async def extract_frames(self, video_path: str) -> Generator[Dict[str, Any], None, None]:
+    async def extract_frames(self, video_path: str) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Extract frames with rich metadata using hybrid approach.
+        Extract ALL frames with rich metadata.
         Args:
             video_path: Path to video file
         Yields:
@@ -83,46 +82,49 @@ class FrameExtractor:
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             duration = frame_count / fps
             
-            # Detect scenes for intelligent sampling
-            scenes = await self.extract_scenes(video_path)
+            # Log video stats
+            self.logger.info(f"Processing video: {fps} fps, {frame_count} frames, {duration:.2f} seconds")
             
-            for scene_start, scene_end in scenes:
-                # Calculate frames to sample in this scene
-                scene_duration = scene_end - scene_start
-                frames_to_sample = int(scene_duration * self.sample_rate)
+            # Detect scenes for metadata
+            scenes = await self.extract_scenes(video_path)
+            current_scene = 0
+            next_scene_start = scenes[1][0] if len(scenes) > 1 else duration
+            
+            # Process every single frame
+            frame_number = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                    
+                # Get current frame time
+                frame_time = frame_number / fps
                 
-                # Position capture at scene start
-                start_frame = int(scene_start * fps)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                # Update current scene if needed
+                while frame_time >= next_scene_start and current_scene < len(scenes) - 1:
+                    current_scene += 1
+                    next_scene_start = scenes[current_scene + 1][0] if current_scene < len(scenes) - 1 else duration
                 
-                # Extract frames from scene
-                for _ in range(frames_to_sample):
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                        
-                    # Get current frame metadata
-                    frame_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-                    
-                    # Extract frame metadata
-                    metadata = {
-                        'timestamp': frame_time,
-                        'scene_id': scenes.index((scene_start, scene_end)),
-                        'frame_type': 'scene_change' if abs(frame_time - scene_start) < 0.1 else 'content',
-                        'resolution': (frame.shape[1], frame.shape[0]),
-                        'scene_progress': (frame_time - scene_start) / scene_duration
-                    }
-                    
-                    yield {
-                        'frame': frame,
-                        'metadata': metadata
-                    }
-                    
-                    # Calculate next frame position
-                    next_pos = cap.get(cv2.CAP_PROP_POS_FRAMES) + (fps / self.sample_rate)
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, next_pos)
-                    
-                    # Allow other tasks to run
+                # Extract frame metadata
+                scene_start, scene_end = scenes[current_scene]
+                metadata = {
+                    'timestamp': frame_time,
+                    'frame_number': frame_number,
+                    'scene_id': current_scene,
+                    'frame_type': 'scene_change' if abs(frame_time - scene_start) < 1/fps else 'content',
+                    'resolution': (frame.shape[1], frame.shape[0]),
+                    'scene_progress': (frame_time - scene_start) / (scene_end - scene_start)
+                }
+                
+                yield {
+                    'frame': frame,
+                    'metadata': metadata
+                }
+                
+                frame_number += 1
+                
+                # Allow other tasks to run every 10 frames
+                if frame_number % 10 == 0:
                     await asyncio.sleep(0)
                     
         finally:
